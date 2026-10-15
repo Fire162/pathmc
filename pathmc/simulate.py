@@ -1729,6 +1729,23 @@ def run_do_panel_unified(
         columns are treated as business units and divided by the
         scan-aligned factor before graph surgery.
     """
+    legacy = getattr(gen_model, "_pathmc_legacy_model", gen_model)
+    if kind == "mean" and legacy is not gen_model:
+        with _forced_generative_carry(gen_model):
+            return run_do_panel_unified(
+                legacy,
+                graph_info,
+                idata,
+                panel_info,
+                legacy._pathmc_panel_scan,
+                set=set,
+                kind=kind,
+                families=families,
+                observed_by_time=observed_by_time,
+                data=data,
+                scaling_factors=scaling_factors,
+                random_seed=random_seed,
+            )
     if set is None:
         set = {}
     if families is None:
@@ -1825,21 +1842,6 @@ def run_do_panel_unified(
             _forced_generative_carry(gen_model),
             _scan_do_intervention(gen_model, scan_intervene_updates),
         ):
-            legacy = getattr(gen_model, "_pathmc_legacy_model", gen_model)
-            if legacy is not gen_model:
-                return run_do_panel_unified(
-                    legacy,
-                    graph_info,
-                    idata,
-                    None,
-                    legacy._pathmc_panel_scan,
-                    set=set,
-                    kind=kind,
-                    families=families,
-                    observed_by_time=observed_by_time,
-                    data=data,
-                    scaling_factors=scaling_factors,
-                )
             do_model = pm.do(gen_model, replacements)
             det = pm.compute_deterministics(
                 posterior(idata),
