@@ -1693,6 +1693,7 @@ def run_do_panel_unified(
     data: nw.DataFrame | None = None,
     scaling_factors: ScalingFactors | None = None,
     random_seed: int | None = None,
+    initial: Mapping[str, xr.DataArray] | None = None,
 ) -> DoResult:
     """Run the do-operator on a scan-compiled panel model.
 
@@ -1745,7 +1746,13 @@ def run_do_panel_unified(
                 data=data,
                 scaling_factors=scaling_factors,
                 random_seed=random_seed,
+                initial=initial,
             )
+    if initial is not None and not (scan_info.gaussian_states and kind == "predictive"):
+        raise RuntimeError(
+            "A non-seam initial override must be compiled into the execution "
+            "model before run_do_panel_unified. This is an internal error."
+        )
     if set is None:
         set = {}
     if families is None:
@@ -1809,6 +1816,7 @@ def run_do_panel_unified(
             posterior(idata),
             scan_info,
             interventions=interventions,
+            initial=initial,
             random_seed=random_seed,
         )
         variables = {}
