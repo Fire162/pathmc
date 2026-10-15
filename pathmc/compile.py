@@ -3077,13 +3077,18 @@ def _compile_scan_panel(
                     carry_mu[var] = mu
                     sigma_val = ns_map[f"sigma_{var}"]
                     sampled_state = mu + sigma_val * carry_innov_t[var]
-                    obs_state = obs_carry_t[var]
-                    observed_or_sampled = pt.switch(
-                        pt.isnan(obs_state), sampled_state, obs_state
-                    )
-                    new_endo[var] = pt.switch(
-                        use_observed_carry_t, observed_or_sampled, sampled_state
-                    )
+                    if coherent:
+                        # The generative graph cannot condition future states on
+                        # observations, even when its legacy carry flag is set.
+                        new_endo[var] = sampled_state
+                    else:
+                        obs_state = obs_carry_t[var]
+                        observed_or_sampled = pt.switch(
+                            pt.isnan(obs_state), sampled_state, obs_state
+                        )
+                        new_endo[var] = pt.switch(
+                            use_observed_carry_t, observed_or_sampled, sampled_state
+                        )
                 elif family == "bernoulli":
                     new_endo[var] = 1.0 / (1.0 + pt.exp(-mu))
                 elif family in ("poisson", "negbinomial"):
