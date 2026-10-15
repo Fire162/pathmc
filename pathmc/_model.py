@@ -1994,6 +1994,7 @@ class PathModel:
         kind: str = "mean",
         simulate_over: str | None = None,
         random_seed: int | None = None,
+        *,
         initial: Mapping[str, Any] | None = None,
     ) -> DoResult:
         """Simulate an intervention using the do-operator.
@@ -2756,6 +2757,7 @@ def model(
     latent: list[str] | None = None,
     priors: dict[str, Any] | None = None,
     scaling: Scaling | ScalingFactors | None = None,
+    *,
     initial: Mapping[str, Any] | None = None,
     _initial_internal: Mapping[str, np.ndarray] | None = None,
     **kwargs: Any,
