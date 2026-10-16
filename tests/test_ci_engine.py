@@ -557,6 +557,40 @@ class TestRankCollapseIsVisible:
         assert "[effective_k=1]" in html
         assert "rank-collapsed" in repr(result)
 
+    def test_collapsed_significant_row_is_not_a_violation(self):
+        # The only significant row is the collapsed marginal of M ⊥⊥ X | {C}.
+        # A wrong display marks that row ✗ and calls it a violated implication.
+        rng = np.random.default_rng(4)
+        n = 80
+        m = rng.normal(size=n)
+        frame = pd.DataFrame({
+            "C": np.ones(n),
+            "M": m,
+            "X": m + rng.normal(scale=0.05, size=n),
+            "Z": rng.normal(size=n),
+        })
+        model = pathmc.model("M ~ C\nZ ~ X", data=frame)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            result = model.test_implications()
+        significant = result.results[result.results["significant"]]
+        assert len(significant) == 1
+        row = significant.iloc[0]
+        assert row["rank_collapsed"]
+        assert {row["x"], row["y"]} == {"M", "X"}
+        html = result._repr_html_()
+        collapsed_row = next(
+            part for part in html.split("<tr") if "M ⊥⊥ X | {C}" in part
+        )
+        assert "✗" not in collapsed_row
+        assert "✓" not in collapsed_row
+        assert "—" in collapsed_row
+        assert "ffe0e0" not in collapsed_row
+        assert "[effective_k=0]" in collapsed_row
+        assert "violated" not in html
+        assert "implied independences violated" not in html
+        assert "0 violations" in repr(result)
+
     def test_well_conditioned_implications_do_not_warn(self, frame):
         model = pathmc.model("M ~ X\nY ~ M", data=frame[["X", "M", "Y"]])
         with warnings.catch_warnings():
@@ -599,6 +633,46 @@ class TestRankCollapseIsVisible:
         assert "requested parent sets" in html
         assert "LMC violations (given DAG)" in html
         assert "rank-collapsed" in repr(result)
+
+    def test_collapsed_row_does_not_decide_the_lmc_count(self):
+        rng = np.random.default_rng(0)
+        n = 80
+        a = rng.normal(size=n)
+        y = rng.normal(size=n)
+        frame = pd.DataFrame({
+            "A": a,
+            "B": 2 * a - 1,
+            "M": y + rng.normal(scale=0.05, size=n),
+            "X": rng.normal(size=n),
+            "Y": y,
+        })
+        model = pathmc.model("M ~ A + B\nY ~ X", data=frame)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            result = model.falsify(n_permutations=8, random_seed=0)
+        collapsed = result.local_violations["rank_collapsed"].astype(bool)
+        assert collapsed.any()
+        scored = result.local_violations.loc[~collapsed]
+        scored_viol = int(scored["violation"].sum()) if len(scored) else 0
+        scored_tests = len(scored)
+        n_collapsed = int(collapsed.sum())
+        lines = result._summary_lines()
+        count_line = next(
+            line
+            for line in lines
+            if "violates" in line and "tests rank-collapsed" in line
+        )
+        raw = f"{result.given_lmc_violations}/{result.n_lmc_tests}"
+        assert raw not in count_line
+        assert f"{n_collapsed} of {result.n_lmc_tests}" in count_line
+        if scored_tests:
+            assert f"{scored_viol} of {scored_tests}" in count_line
+        else:
+            assert "none of the requested parental independences" in count_line
+        assert any("requested parent sets" in line for line in lines)
+        html = result._repr_html_()
+        assert f"{result.given_lmc_violations} / {result.n_lmc_tests}" not in html
+        assert f"{n_collapsed} of {result.n_lmc_tests}" in html
 
     def test_falsify_full_rank_parents_do_not_warn(self, frame):
         model = pathmc.model("M ~ X\nY ~ M", data=frame[["X", "M", "Y"]])

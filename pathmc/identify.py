@@ -564,17 +564,36 @@ class ImplicationTestResult(ResultReprMixin):
             return 0
         return int(frame["rank_collapsed"].fillna(False).astype(bool).sum())
 
+    def _written_implication_counts(self) -> tuple[int, int]:
+        """Tests and violations of the independence that was written down.
+
+        A rank-collapsed row did not test that independence, so it is in
+        neither count. Frames without the column keep the old totals.
+        """
+        frame = self.results
+        if frame.empty or "significant" not in frame.columns:
+            return 0, 0
+        if "rank_collapsed" not in frame.columns:
+            return len(frame), int(frame["significant"].sum())
+        collapsed = frame["rank_collapsed"].fillna(False).astype(bool)
+        scored = frame.loc[~collapsed]
+        if scored.empty:
+            return 0, 0
+        return len(scored), int(scored["significant"].sum())
+
     def _repr_compact(self) -> str:
         collapsed = self._n_rank_collapsed()
         collapse = f", {collapsed} rank-collapsed" if collapsed else ""
+        _, written_violations = self._written_implication_counts()
         return (
             f"ImplicationTestResult({self.n_tests} tests, "
-            f"{self.n_violations} violations{collapse}, α={self.alpha})"
+            f"{written_violations} violations{collapse}, α={self.alpha})"
         )
 
     def _repr_html_(self) -> str:
         """Rich HTML display for Jupyter notebooks."""
         n_collapsed = self._n_rank_collapsed()
+        written_tests, written_violations = self._written_implication_counts()
         if n_collapsed:
             noun = "set" if n_collapsed == 1 else "sets"
             collapse = (
@@ -584,17 +603,17 @@ class ImplicationTestResult(ResultReprMixin):
             )
         else:
             collapse = ""
-        if self.n_violations == 0 and not n_collapsed:
+        if written_violations == 0 and not n_collapsed:
             status = (
                 '<span style="color: green; font-weight: bold;">✓ All '
                 "implied independences are consistent with the data.</span>"
             )
-        elif self.n_violations == 0:
+        elif written_violations == 0:
             status = collapse
         else:
             status = (
                 f'<span style="color: red; font-weight: bold;">✗ '
-                f"{self.n_violations} of {self.n_tests} implied "
+                f"{written_violations} of {written_tests} implied "
                 f"independences violated.</span>"
             )
             if collapse:
@@ -607,8 +626,9 @@ class ImplicationTestResult(ResultReprMixin):
             cond = row["conditioning_set"]
             cond_str = f" | {{{cond}}}" if cond else ""
             statement = f"{row['x']} ⊥⊥ {row['y']}{cond_str}"
+            collapsed = _row_rank_collapsed(row)
 
-            if pd.isna(row["p_value"]):
+            if collapsed or pd.isna(row["p_value"]):
                 style = ""
                 sig_mark = "—"
             elif row["significant"]:
@@ -695,16 +715,21 @@ def _warn_conditioning_rank_collapse(statements: list[str]) -> None:
     )
 
 
+def _row_rank_collapsed(row: pd.Series) -> bool:
+    """Whether this displayed row did not test the written conditioning set."""
+    if "rank_collapsed" not in row.index or pd.isna(row["rank_collapsed"]):
+        return False
+    return bool(row["rank_collapsed"])
+
+
 def _rank_collapse_note(row: pd.Series) -> str:
     """Mark a displayed independence whose conditioning set collapsed.
 
     Frames without ``rank_collapsed``, and rows whose test was skipped,
-    get no marker. The marker is the only HTML-table change, so a
-    full-rank result renders as it did before.
+    get no marker. The marker is the only HTML-table change for a
+    full-rank result, which renders as it did before.
     """
-    if "rank_collapsed" not in row.index or pd.isna(row["rank_collapsed"]):
-        return ""
-    if not bool(row["rank_collapsed"]):
+    if not _row_rank_collapsed(row):
         return ""
     return f" [effective_k={int(row['effective_k'])}]"
 

@@ -213,6 +213,24 @@ class FalsificationResult(ResultReprMixin):
             return 0
         return int(frame["rank_collapsed"].fillna(False).astype(bool).sum())
 
+    def _requested_lmc_counts(self) -> tuple[int, int]:
+        """Violations and tests of the parent set that was written down.
+
+        A rank-collapsed row is in neither count. The stored
+        ``given_lmc_violations`` / ``n_lmc_tests`` still describe every
+        executed test, including the permutation comparison.
+        """
+        frame = self.local_violations
+        if frame.empty or "violation" not in frame.columns:
+            return 0, 0
+        if "rank_collapsed" not in frame.columns:
+            return int(frame["violation"].astype(bool).sum()), len(frame)
+        collapsed = frame["rank_collapsed"].fillna(False).astype(bool)
+        scored = frame.loc[~collapsed]
+        if scored.empty:
+            return 0, 0
+        return int(scored["violation"].astype(bool).sum()), len(scored)
+
     def _summary_lines(self) -> list[str]:
         if not self.can_evaluate:
             return [
@@ -230,10 +248,28 @@ class FalsificationResult(ResultReprMixin):
             f"  The DAG is{informative} informative: {self.n_in_mec} / "
             f"{self.n_permutations} permutations lie in its Markov "
             f"equivalence class (p = {self.p_value_tpa:.3f}).",
-            f"  The DAG violates {self.given_lmc_violations}/{self.n_lmc_tests} "
-            f"LMCs and beats {beats:.1f}% of the permuted DAGs "
-            f"(p = {self.p_value_lmc:.3f}).",
         ]
+        if n_collapsed:
+            scored_viol, scored_tests = self._requested_lmc_counts()
+            if scored_tests:
+                viol_clause = (
+                    f"violates {scored_viol} of {scored_tests} requested "
+                    f"parental independences"
+                )
+            else:
+                viol_clause = "violates none of the requested parental independences"
+            lines.append(
+                f"  The DAG {viol_clause}; {n_collapsed} of "
+                f"{self.n_lmc_tests} tests rank-collapsed. It beats "
+                f"{beats:.1f}% of the permuted DAGs "
+                f"(p = {self.p_value_lmc:.3f})."
+            )
+        else:
+            lines.append(
+                f"  The DAG violates {self.given_lmc_violations}/"
+                f"{self.n_lmc_tests} LMCs and beats {beats:.1f}% of the "
+                f"permuted DAGs (p = {self.p_value_lmc:.3f})."
+            )
         if n_collapsed:
             noun = "test" if n_collapsed == 1 else "tests"
             lines.append(
@@ -302,9 +338,20 @@ class FalsificationResult(ResultReprMixin):
             )
 
         beats = (1.0 - self.p_value_lmc) * 100.0
-        lmc = f"{self.given_lmc_violations} / {self.n_lmc_tests}"
         if n_collapsed:
-            lmc += " (rank-collapsed rows are not the requested parent sets)"
+            scored_viol, scored_tests = self._requested_lmc_counts()
+            if scored_tests:
+                lmc = (
+                    f"{scored_viol} / {scored_tests} requested "
+                    f"({n_collapsed} of {self.n_lmc_tests} rank-collapsed)"
+                )
+            else:
+                lmc = (
+                    f"none requested "
+                    f"({n_collapsed} of {self.n_lmc_tests} rank-collapsed)"
+                )
+        else:
+            lmc = f"{self.given_lmc_violations} / {self.n_lmc_tests}"
         rows = [
             ("Informative (falsifiable)", "Yes" if self.falsifiable else "No"),
             (
