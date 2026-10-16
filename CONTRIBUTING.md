@@ -163,7 +163,7 @@ Build the static site to `great-docs/_site/` from the project root:
 make docs
 ```
 
-`make docs` renders HTML from the committed `_freeze/` cache. It does not re-execute notebook cells. `make cleandocs` only removes the ephemeral `great-docs/` build directory and leaves `_freeze/` untouched, so `make cleandocs && make docs` still shows the last-frozen outputs.
+`make docs` renders HTML from the committed `_freeze/` cache. It does not re-execute notebook cells. For an executable page that cache is the whole document (`result.markdown` in `_freeze/<path>/execute-results/html.json`), not just cell outputs, so a prose edit does not appear until the cache is refreshed. `make cleandocs` only removes the ephemeral `great-docs/` build directory and leaves `_freeze/` untouched, so `make cleandocs && make docs` still shows the last-frozen page.
 
 Preview the docs locally:
 
@@ -171,7 +171,7 @@ Preview the docs locally:
 uv run great-docs preview
 ```
 
-The site uses `freeze: true` to cache notebook outputs in the committed `_freeze/` directory, so ordinary builds never spawn a Jupyter kernel. After editing a single executable page (or changing pathmc behavior that affects that page's rendered output), refresh its cache and commit it:
+The site uses `freeze: true`, so ordinary builds never spawn a Jupyter kernel and do not re-render executable pages from the current `.qmd`. After editing a single executable page (or changing pathmc behavior that affects that page's rendered output), refresh its cache and commit it:
 
 ```bash
 make freeze-page PAGE=docs/examples/01-foundations/my_page.qmd

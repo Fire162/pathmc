@@ -182,11 +182,13 @@ jupyter: pathmc
 fig-format: retina
 
 # Freeze cache --------------------------------------------------------------
-# Local builds execute and cache; remote builds only render from the committed
-# `_freeze/` cache. Refresh after editing a page with `great-docs freeze <page>`.
-# `true` (not `auto`) ensures CI never re-executes a page even if its source
-# hash drifted: pathmc's MCMC outputs are non-deterministic and pages should
-# only be re-executed deliberately via `great-docs freeze`.
+# `true` (not `auto`): `great-docs build`, local or CI, renders the committed
+# `_freeze/` markdown and never re-executes, even if the source hash drifted.
+# The page body is `result.markdown` in
+# `_freeze/<path>/execute-results/html.json`, not the current `.qmd`.
+# Re-execute only via `great-docs freeze <page>` / `make freeze-page`.
+# MCMC outputs are non-deterministic, so a drifted source must not refresh
+# the cache by itself.
 freeze: true
 
 # Curated agent SKILL.md (see Phase 3 of the migration plan). Lives inside the

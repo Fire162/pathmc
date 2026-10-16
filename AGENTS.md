@@ -58,14 +58,20 @@ This package targets **PyMC ≥ 6.0, ArviZ ≥ 1.1, PyTensor ≥ 3.0, and NumPy 
 
 ## Building the docs
 
-The site is built with [Great Docs](https://posit-dev.github.io/great-docs/) via `great-docs.yml`: `uv run great-docs build`. The output dir `great-docs/_site/` is ephemeral and gitignored — never edit it. Edit sources instead: `docs/user_guide/*.qmd`, `docs/examples/**/*.qmd`, `great-docs.yml`, and `pathmc/skills/pathmc/SKILL.md`.
+The site is built with [Great Docs](https://posit-dev.github.io/great-docs/) via `great-docs.yml`: `make docs`, or `uv run great-docs build` after `uv sync --extra docs`. `make docs` does not install the docs extra. `great-docs/` is regenerated on every build, and pre-render copies the repo `_freeze/` over `great-docs/_freeze/`. The output dir `great-docs/_site/` is ephemeral and gitignored. Never edit the build directory. Edit sources: `docs/user_guide/*.qmd`, `docs/examples/**/*.qmd`, `great-docs.yml`, and `pathmc/skills/pathmc/SKILL.md`.
 
-Notebooks are frozen (`freeze: true`): the committed `_freeze/` cache supplies cell outputs and CI never spawns a kernel, so **local previews show the last-frozen output, not in-progress edits.** After editing an executable page, refresh and commit the cache:
+`freeze: true` is not an output cache. A build does not execute, and it does not render the current `.qmd` for an executable page. Quarto renders `result.markdown` from `_freeze/<rendered-path>/execute-results/html.json` — title, prose, code, and embedded outputs. A source-hash mismatch does not refresh that file (`true`, not `auto`). Only `make freeze-page` or `great-docs freeze` re-executes. Pages that use fenced ` ```python ` blocks, not ` ```{python} `, are not frozen and do render from source.
+
+The sidebar is not proof the page updated. great-docs builds nav from the current `.qmd` title, so the menu can show the new title while the HTML `<h1>` is still the frozen one. Before building to preview an executable page, compare the `.qmd` title to `result.markdown`. If they differ, the build will show the old page. Do not spend a build to discover that. The freeze path drops the numeric examples prefix: `docs/examples/04-panel-time/foo.qmd` is `_freeze/docs/examples/panel-time/foo/execute-results/html.json`.
+
+`make freeze-page` runs the notebook, so the code those cells call has to be importable. If it is not on this branch, do not start a kernel, and do not `quarto render` a single file out of `great-docs/` — that ignores the cache and fails. For a prose-only change, splice the new front matter and prose into `result.markdown`, keep every `::: {#… .cell` block and its outputs, and update figure alt text to the new `fig-cap`. Commit that `html.json` or CI ships the old body. Do not invent outputs.
 
 ```bash
 make freeze-page PAGE=docs/examples/01-foundations/my_page.qmd
 git add _freeze/
 ```
+
+`great-docs preview` defaults to port 3000. If that port is already taken, it is another server, not this worktree. Preview on a free port and check the HTML `<title>` against the `.qmd` before treating the page as current.
 
 
 ## Style
