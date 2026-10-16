@@ -124,8 +124,9 @@ The DSL is lavaan-inspired:
 3. **`ate()`/`cate()`/`att()`/`atu()` return an `EstimandResult`, not a `DoResult`.**
    It knows the outcome, so `r.mean()`, `r.hdi()`, and `r.prob("> 0")` need
    no variable argument, `float(r)` gives the posterior mean, and printing it
-   shows a tidy summary. `m.do(...)` returns a `DoResult` describing the whole
+   shows a tidy summary. `m.do(set=...)` returns a `DoResult` describing the whole
    system, where accessors still take a variable name (`r.mean("Y")`).
+   `m.do(policy=...)` returns a `PolicyRun`, not a `DoResult`.
 4. **The DSL is lavaan-*inspired*, not a 1:1 reimplementation.**
    `~`, `~~`, `:=`, and labeled coefficients all work. Latent-variable
    measurement models (`=~`) are out of scope in v0.1 — see the user
@@ -217,7 +218,7 @@ The DSL is lavaan-inspired:
   use `lag()` terms.
 - Evaluate a history-dependent treatment policy on a fitted Gaussian
   lag panel with `do(policy=TreatmentPolicy(...), simulate_over="time",
-  horizon=n_times)`. Contrast two `DoResult`s that share the posterior,
+  horizon=n_times)`. Contrast two `PolicyRun` results that share the posterior,
   baseline, seed, horizon, and simulation count; the contrast is the
   difference, not a winner. `simulation_mcse` keeps the posterior
   dimension.
