@@ -1446,11 +1446,12 @@ class PathModel:
         A significant result flags a *violation*: the data show an
         association that the DAG says should not exist, suggesting a
         missing edge or incorrect structure. Each row also reports
-        ``df`` and ``effective_k``. When a conditioner is constant,
-        duplicated, or collinear with the others, ``effective_k`` is
-        smaller than the conditioning set and a warning is emitted: the
+        ``requested_k``, ``effective_k``, ``rank_collapsed``, and ``df``.
+        When a conditioner is constant, duplicated, or collinear with the
+        others, ``rank_collapsed`` is set and a warning is emitted: the
         p-value then refers to that smaller set, not the independence
-        implied by the DAG. Drop the redundant variable and re-test.
+        implied by the DAG. The display says so. Drop the redundant
+        variable and re-test.
 
         Uses the observed data, not the posterior.
 
@@ -1624,11 +1625,11 @@ class PathModel:
         :meth:`test_implications`. Because that test is linear, purely
         nonlinear dependencies are not detected, so a "not rejected"
         verdict is only as strong as the linear-Gaussian assumption.
-        ``local_violations`` includes ``effective_k`` and ``df`` for each
-        test on this DAG. A rank-deficient parent set (a constant,
-        duplicate, or collinear parent) warns and reports an
-        ``effective_k`` below the requested parent count; that p-value
-        is not evidence about the full parental independence.
+        ``local_violations`` includes ``requested_k``, ``effective_k``,
+        ``rank_collapsed``, and ``df`` for each test on this DAG. A
+        rank-deficient parent set (a constant, duplicate, or collinear
+        parent) sets ``rank_collapsed``, warns, and the summary says
+        those rows did not test the requested parental independence.
 
         Uses the observed data, not the posterior, and works before
         sampling. Models with residual covariances (``~~``) are not

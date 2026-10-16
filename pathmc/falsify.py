@@ -56,8 +56,9 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 
-from pathmc._ci import _PartialCorrelationTester, warn_conditioning_rank_collapse
+from pathmc._ci import _PartialCorrelationTester
 from pathmc.graph import GraphInfo
+from pathmc.identify import _warn_conditioning_rank_collapse
 from pathmc.reprs import ResultReprMixin
 
 if TYPE_CHECKING:
@@ -131,13 +132,14 @@ class FalsificationResult(ResultReprMixin):
         Significance level used for each conditional independence test.
     local_violations : pd.DataFrame
         One row per LMC test on the given DAG with columns ``node``,
-        ``non_descendant``, ``conditioning_set``, ``effective_k``,
-        ``df``, ``p_value``, and ``violation``. ``effective_k`` is the
-        number of linearly independent parents actually conditioned on;
-        ``df`` is the residual degrees of freedom. A row with
-        ``effective_k`` below the number of names in
-        ``conditioning_set`` did not test the parental independence that
-        was requested.
+        ``non_descendant``, ``conditioning_set``, ``requested_k``,
+        ``effective_k``, ``rank_collapsed``, ``df``, ``p_value``, and
+        ``violation``. ``requested_k`` is the number of parents written
+        down. ``effective_k`` is how many were linearly independent, and
+        ``df`` is the residual degrees of freedom. ``rank_collapsed`` is
+        true when that executed test used fewer parents than requested.
+        A collapsed row did not test the parental independence that was
+        requested.
     """
 
     given_lmc_violations: int
@@ -204,6 +206,13 @@ class FalsificationResult(ResultReprMixin):
         mask = self.local_violations["violation"].astype(bool)
         return self.local_violations[mask].copy()
 
+    def _n_rank_collapsed(self) -> int:
+        """Count executed LMC rows whose parent set was rank-deficient."""
+        frame = self.local_violations
+        if frame.empty or "rank_collapsed" not in frame.columns:
+            return 0
+        return int(frame["rank_collapsed"].fillna(False).astype(bool).sum())
+
     def _summary_lines(self) -> list[str]:
         if not self.can_evaluate:
             return [
@@ -215,7 +224,8 @@ class FalsificationResult(ResultReprMixin):
         informative = "" if self.falsifiable else " not"
         decision = "reject" if self.falsified else "do not reject"
         beats = (1.0 - self.p_value_lmc) * 100.0
-        return [
+        n_collapsed = self._n_rank_collapsed()
+        lines = [
             f"DAG falsification (significance level = {self.significance_level}):",
             f"  The DAG is{informative} informative: {self.n_in_mec} / "
             f"{self.n_permutations} permutations lie in its Markov "
@@ -223,20 +233,36 @@ class FalsificationResult(ResultReprMixin):
             f"  The DAG violates {self.given_lmc_violations}/{self.n_lmc_tests} "
             f"LMCs and beats {beats:.1f}% of the permuted DAGs "
             f"(p = {self.p_value_lmc:.3f}).",
-            f"  Verdict: we {decision} the DAG.",
         ]
+        if n_collapsed:
+            noun = "test" if n_collapsed == 1 else "tests"
+            lines.append(
+                f"  {n_collapsed} parental {noun} rank-collapsed. Those "
+                f"p-values are not the requested parental independences."
+            )
+            lines.append(
+                f"  Verdict: we {decision} the DAG on the tests that ran; "
+                f"rank-collapsed rows did not test the requested parent sets."
+            )
+        else:
+            lines.append(f"  Verdict: we {decision} the DAG.")
+        return lines
 
     def _repr_compact(self) -> str:
         if not self.can_evaluate:
-            return f"FalsificationResult(not_evaluable, {self.n_permutations} permutations)"
+            return (
+                f"FalsificationResult(not_evaluable, "
+                f"{self.n_permutations} permutations)"
+            )
         if self.falsified:
             verdict = "falsified"
         elif not self.falsifiable:
             verdict = "not_falsifiable"
         else:
             verdict = "not_rejected"
+        collapse = ", rank-collapsed" if self._n_rank_collapsed() else ""
         return (
-            f"FalsificationResult({verdict}, "
+            f"FalsificationResult({verdict}{collapse}, "
             f"p_lmc={self.p_value_lmc:.3f}, "
             f"{self.n_permutations} permutations)"
         )
@@ -267,18 +293,25 @@ class FalsificationResult(ResultReprMixin):
                 "rejected</span> — the DAG is informative and beats the "
                 "permuted baseline."
             )
+        n_collapsed = self._n_rank_collapsed()
+        if n_collapsed:
+            noun = "test" if n_collapsed == 1 else "tests"
+            verdict += (
+                f" {n_collapsed} rank-collapsed {noun} did not test the "
+                f"requested parent sets."
+            )
 
         beats = (1.0 - self.p_value_lmc) * 100.0
+        lmc = f"{self.given_lmc_violations} / {self.n_lmc_tests}"
+        if n_collapsed:
+            lmc += " (rank-collapsed rows are not the requested parent sets)"
         rows = [
             ("Informative (falsifiable)", "Yes" if self.falsifiable else "No"),
             (
                 "Permutations in Markov equivalence class",
                 f"{self.n_in_mec} / {self.n_permutations} (p = {self.p_value_tpa:.3f})",
             ),
-            (
-                "LMC violations (given DAG)",
-                f"{self.given_lmc_violations} / {self.n_lmc_tests}",
-            ),
+            ("LMC violations (given DAG)", lmc),
             ("Beats permuted baseline", f"{beats:.1f}% (p = {self.p_value_lmc:.3f})"),
         ]
         body = "".join(
@@ -420,18 +453,15 @@ def _validate_lmc(
     tester: _PartialCorrelationTester,
     significance_ci: float,
     include_unconditional: bool,
-    collapse_notes: list[str] | None = None,
 ) -> tuple[int, int, list[dict]]:
     """Count Local Markov Condition violations of *dag* against the data.
 
     Returns ``(n_tests, n_violations, local)`` where ``local`` holds one
     record per executed test. Triples whose CI test cannot be run (missing
-    data, too few observations) are skipped and not counted.
-
-    When *collapse_notes* is given, each executed test whose conditioning
-    set is rank-deficient appends a short label. Permuted DAGs omit the
-    list: their p-values still use the rank-aware test, but only the given
-    DAG's collapses are reported to the user.
+    data, too few observations) are skipped and not counted. Each record
+    copies ``requested_k`` and ``rank_collapsed`` from the :class:`CIResult`
+    already in hand. Permuted DAGs use the same records; only the given
+    DAG's frame is shown to the user.
     """
     n_tests = 0
     n_violations = 0
@@ -444,26 +474,47 @@ def _validate_lmc(
         violation = result.p <= significance_ci
         if violation:
             n_violations += 1
-        cond = ", ".join(parents)
         local.append({
             "node": node,
             "non_descendant": non_desc,
-            "conditioning_set": cond,
+            "conditioning_set": ", ".join(parents),
+            "requested_k": result.requested_k,
             "effective_k": result.effective_k,
+            "rank_collapsed": result.rank_collapsed,
             "df": result.df,
             "p_value": result.p,
             "violation": violation,
         })
-        if (
-            collapse_notes is not None
-            and result.effective_k is not None
-            and result.effective_k < len(parents)
-        ):
-            collapse_notes.append(
-                f"{node} ⊥⊥ {non_desc} | {{{cond}}} "
-                f"(requested {len(parents)}, effective_k {result.effective_k})"
-            )
     return n_tests, n_violations, local
+
+
+def _falsify_collapse_labels(frame: pd.DataFrame) -> list[str]:
+    """Labels for executed LMC rows whose parent set collapsed."""
+    if frame.empty or "rank_collapsed" not in frame.columns:
+        return []
+    collapsed = frame.loc[frame["rank_collapsed"].fillna(False).astype(bool)]
+    labels: list[str] = []
+    for _, row in collapsed.iterrows():
+        labels.append(
+            f"{row['node']} ⊥⊥ {row['non_descendant']} | "
+            f"{{{row['conditioning_set']}}} "
+            f"(requested {int(row['requested_k'])}, "
+            f"effective_k {int(row['effective_k'])})"
+        )
+    return labels
+
+
+_LOCAL_COLUMNS = [
+    "node",
+    "non_descendant",
+    "conditioning_set",
+    "requested_k",
+    "effective_k",
+    "rank_collapsed",
+    "df",
+    "p_value",
+    "violation",
+]
 
 
 def _validate_tpa(
@@ -547,7 +598,8 @@ def falsify_graph(
     purely nonlinear dependencies are not detected, so a "not rejected"
     verdict is only as strong as the linear-Gaussian assumption. The test
     uses observed data directly and works before sampling. Each local
-    violation row reports ``effective_k`` and ``df`` from that test.
+    violation row reports ``requested_k``, ``effective_k``,
+    ``rank_collapsed``, and ``df`` from that test.
 
     Parameters
     ----------
@@ -588,13 +640,11 @@ def falsify_graph(
     Warns
     -----
     UserWarning
-        When an LMC test on the *given* DAG conditions on a
-        rank-deficient parent set. The test still runs at the smaller
-        effective rank; ``effective_k`` on that ``local_violations`` row
-        is below the requested parent count, and the p-value is not
-        evidence about the full parental independence. Permuted DAGs are
-        not warned about individually. Drop the redundant parent and
-        re-run.
+        When an LMC test on the *given* DAG has ``rank_collapsed`` set.
+        The test still runs at the smaller effective rank; that p-value
+        is not evidence about the full parental independence. Permuted
+        DAGs are not warned about individually. Drop the redundant parent
+        and re-run.
 
     Raises
     ------
@@ -663,15 +713,14 @@ def falsify_graph(
     rng = np.random.default_rng(random_seed)
     tester = _PartialCorrelationTester(data, nodes)
 
-    collapse_notes: list[str] = []
     given_n_tests, given_violations, local = _validate_lmc(
         dag,
         tester,
         significance_ci,
         include_unconditional,
-        collapse_notes=collapse_notes,
     )
-    warn_conditioning_rank_collapse(collapse_notes)
+    local_df = pd.DataFrame(local) if local else pd.DataFrame(columns=_LOCAL_COLUMNS)
+    _warn_conditioning_rank_collapse(_falsify_collapse_labels(local_df))
     given_fraction = given_violations / given_n_tests if given_n_tests else 0.0
 
     perm_lmc_fractions: list[float] = []
@@ -698,22 +747,6 @@ def falsify_graph(
     else:
         p_value_lmc = 1.0
         p_value_tpa = 1.0
-
-    local_df = (
-        pd.DataFrame(local)
-        if local
-        else pd.DataFrame(
-            columns=[
-                "node",
-                "non_descendant",
-                "conditioning_set",
-                "effective_k",
-                "df",
-                "p_value",
-                "violation",
-            ]
-        )
-    )
 
     return FalsificationResult(
         given_lmc_violations=given_violations,

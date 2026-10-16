@@ -20,6 +20,7 @@ independence enumeration and testing using the DAG stored in GraphInfo.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -28,7 +29,7 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 
-from pathmc._ci import CIResult, partial_correlation_ci, warn_conditioning_rank_collapse
+from pathmc._ci import CIResult, partial_correlation_ci
 from pathmc.graph import GraphInfo
 from pathmc.reprs import ResultReprMixin
 
@@ -520,14 +521,16 @@ class ImplicationTestResult(ResultReprMixin):
     ----------
     results : pd.DataFrame
         One row per independence test with columns: ``x``, ``y``,
-        ``conditioning_set``, ``effective_k``, ``df``, ``partial_corr``,
-        ``p_value``, ``n_obs``, ``significant``. ``effective_k`` is the
-        number of linearly independent conditioners actually used;
-        ``df`` is the residual degrees of freedom (``n_obs - effective_k
-        - 2``). Both are missing when the test was skipped. A row with
-        ``effective_k`` below the number of names in
-        ``conditioning_set`` did not test the independence that was
-        requested.
+        ``conditioning_set``, ``requested_k``, ``effective_k``,
+        ``rank_collapsed``, ``df``, ``partial_corr``, ``p_value``,
+        ``n_obs``, ``significant``. ``requested_k`` is the number of
+        conditioners written down. ``effective_k`` is how many were
+        linearly independent, and ``df`` is the residual degrees of
+        freedom (``n_obs - effective_k - 2``). ``effective_k`` and
+        ``df`` are missing when the test was skipped.
+        ``rank_collapsed`` is true when an executed test used fewer
+        conditioners than requested, and false on a skip. A collapsed
+        row did not test the independence that was requested.
     alpha : float
         Significance level used for the ``significant`` column.
     """
@@ -554,25 +557,48 @@ class ImplicationTestResult(ResultReprMixin):
         """Return the full results as a DataFrame."""
         return self.results.copy()
 
+    def _n_rank_collapsed(self) -> int:
+        """Count executed rows whose conditioning set was rank-deficient."""
+        frame = self.results
+        if frame.empty or "rank_collapsed" not in frame.columns:
+            return 0
+        return int(frame["rank_collapsed"].fillna(False).astype(bool).sum())
+
     def _repr_compact(self) -> str:
+        collapsed = self._n_rank_collapsed()
+        collapse = f", {collapsed} rank-collapsed" if collapsed else ""
         return (
             f"ImplicationTestResult({self.n_tests} tests, "
-            f"{self.n_violations} violations, α={self.alpha})"
+            f"{self.n_violations} violations{collapse}, α={self.alpha})"
         )
 
     def _repr_html_(self) -> str:
         """Rich HTML display for Jupyter notebooks."""
-        if self.n_violations == 0:
+        n_collapsed = self._n_rank_collapsed()
+        if n_collapsed:
+            noun = "set" if n_collapsed == 1 else "sets"
+            collapse = (
+                f'<span style="color: orange; font-weight: bold;">⚠ '
+                f"{n_collapsed} conditioning {noun} rank-collapsed.</span> "
+                "Those rows did not test the independence you requested."
+            )
+        else:
+            collapse = ""
+        if self.n_violations == 0 and not n_collapsed:
             status = (
                 '<span style="color: green; font-weight: bold;">✓ All '
                 "implied independences are consistent with the data.</span>"
             )
+        elif self.n_violations == 0:
+            status = collapse
         else:
             status = (
                 f'<span style="color: red; font-weight: bold;">✗ '
                 f"{self.n_violations} of {self.n_tests} implied "
                 f"independences violated.</span>"
             )
+            if collapse:
+                status = f"{status} {collapse}"
 
         header = f"<h4>DAG Implication Tests (α = {self.alpha})</h4><p>{status}</p>"
 
@@ -624,27 +650,80 @@ class ImplicationTestResult(ResultReprMixin):
         return header + table
 
 
-def _requested_conditioner_count(conditioning_set: str) -> int:
-    """Count names in a ``", "``-joined conditioning set (``""`` is empty)."""
-    if not conditioning_set:
-        return 0
-    return len(conditioning_set.split(", "))
+def _caller_stacklevel() -> int:
+    """Stack level that attributes a warning to the first non-pathmc frame."""
+    import sys
+
+    frame = sys._getframe(1)
+    level = 1
+    while frame.f_back is not None:
+        frame = frame.f_back
+        level += 1
+        module = frame.f_globals.get("__name__", "")
+        if module != "pathmc" and not module.startswith("pathmc."):
+            return level
+    return level
+
+
+def _warn_conditioning_rank_collapse(statements: list[str]) -> None:
+    """Warn once that executed CI tests conditioned on a smaller set.
+
+    The engine stays silent. Callers pass labels built from rows whose
+    ``rank_collapsed`` flag is set.
+
+    Parameters
+    ----------
+    statements : list[str]
+        One short label per collapsed row, including ``requested_k`` and
+        ``effective_k``. No warning is emitted when empty.
+    """
+    if not statements:
+        return
+    n_collapsed = len(statements)
+    noun = "test" if n_collapsed == 1 else "tests"
+    subject = "This test" if n_collapsed == 1 else "These tests"
+    warnings.warn(
+        f"Conditioning-set rank collapse in {n_collapsed} "
+        f"conditional-independence {noun}: {'; '.join(statements)}. "
+        f"{subject} used fewer linearly independent conditioners than "
+        f"requested, so the p-value is not evidence about the full "
+        f"independence. Drop the constant, duplicated, or collinear "
+        f"conditioner — compare effective_k with requested_k — "
+        f"before reading the result.",
+        UserWarning,
+        stacklevel=_caller_stacklevel(),
+    )
 
 
 def _rank_collapse_note(row: pd.Series) -> str:
     """Mark a displayed independence whose conditioning set collapsed.
 
-    Frames built before ``effective_k`` existed, or rows whose test was
-    skipped, get no marker. The marker is the only HTML change, so a
+    Frames without ``rank_collapsed``, and rows whose test was skipped,
+    get no marker. The marker is the only HTML-table change, so a
     full-rank result renders as it did before.
     """
-    if "effective_k" not in row.index or pd.isna(row["effective_k"]):
+    if "rank_collapsed" not in row.index or pd.isna(row["rank_collapsed"]):
         return ""
-    requested = _requested_conditioner_count(str(row["conditioning_set"]))
-    effective_k = int(row["effective_k"])
-    if effective_k >= requested:
+    if not bool(row["rank_collapsed"]):
         return ""
-    return f" [effective_k={effective_k}]"
+    return f" [effective_k={int(row['effective_k'])}]"
+
+
+def _implication_collapse_labels(frame: pd.DataFrame) -> list[str]:
+    """Labels for executed implication rows whose conditioning set collapsed."""
+    if frame.empty or "rank_collapsed" not in frame.columns:
+        return []
+    collapsed = frame.loc[frame["rank_collapsed"].fillna(False).astype(bool)]
+    labels: list[str] = []
+    for _, row in collapsed.iterrows():
+        conditioning = row["conditioning_set"]
+        given = f" | {{{conditioning}}}" if conditioning else ""
+        labels.append(
+            f"{row['x']} ⊥⊥ {row['y']}{given} "
+            f"(requested {int(row['requested_k'])}, "
+            f"effective_k {int(row['effective_k'])})"
+        )
+    return labels
 
 
 def implied_independences(
@@ -731,16 +810,16 @@ def test_implications(
     Returns
     -------
     ImplicationTestResult
-        Test results with partial correlations, p-values, residual
-        degrees of freedom (``df``), and ``effective_k``.
+        Test results with partial correlations, p-values, ``requested_k``,
+        ``effective_k``, ``rank_collapsed``, and residual degrees of
+        freedom (``df``).
 
     Warns
     -----
     UserWarning
-        When a conditioning set is rank-deficient (constant, duplicated,
-        or collinear columns). The test still runs on the smaller
-        effective set; ``effective_k`` is below the number of requested
-        conditioners, and the p-value is not evidence about the full
+        When an executed row has ``rank_collapsed`` set (a constant,
+        duplicated, or collinear conditioner). The test still runs on the
+        smaller effective set; the p-value is not evidence about the full
         independence. Drop the redundant variable and re-test.
 
     Raises
@@ -749,7 +828,6 @@ def test_implications(
         If required columns are missing from *data*.
     """
     rows: list[dict] = []
-    collapsed: list[str] = []
 
     for ci in independences:
         all_vars = {ci.x, ci.y} | set(ci.conditioning_set)
@@ -775,27 +853,20 @@ def test_implications(
             p = result.p
             df_value = result.df
             effective_k = result.effective_k
-            if result.effective_k < len(z_vars):
-                cond = ", ".join(z_vars)
-                collapsed.append(
-                    f"{ci.x} ⊥⊥ {ci.y} | {{{cond}}} "
-                    f"(requested {len(z_vars)}, effective_k {result.effective_k})"
-                )
 
-        cond_str = ", ".join(z_vars)
         rows.append({
             "x": ci.x,
             "y": ci.y,
-            "conditioning_set": cond_str,
+            "conditioning_set": ", ".join(z_vars),
+            "requested_k": result.requested_k,
             "effective_k": effective_k,
+            "rank_collapsed": result.rank_collapsed,
             "df": df_value,
             "partial_corr": r,
             "p_value": p,
             "n_obs": result.n,
             "significant": (not np.isnan(p)) and p < alpha,
         })
-
-    warn_conditioning_rank_collapse(collapsed)
 
     if rows:
         df = pd.DataFrame(rows)
@@ -805,7 +876,9 @@ def test_implications(
                 "x",
                 "y",
                 "conditioning_set",
+                "requested_k",
                 "effective_k",
+                "rank_collapsed",
                 "df",
                 "partial_corr",
                 "p_value",
@@ -813,6 +886,8 @@ def test_implications(
                 "significant",
             ]
         )
+    _warn_conditioning_rank_collapse(_implication_collapse_labels(df))
+
     return ImplicationTestResult(results=df, alpha=alpha)
 
 
@@ -830,29 +905,6 @@ def _partial_correlation_result(
     cols = [x, y, *z_vars]
     arr = data.select(cols).to_numpy().astype(float)
     return partial_correlation_ci(arr[:, 0], arr[:, 1], arr[:, 2:])
-
-
-def _partial_correlation_test(
-    data: nw.DataFrame,
-    x: str,
-    y: str,
-    z_vars: list[str],
-) -> tuple[float, float, int]:
-    """Test conditional independence via partial correlation.
-
-    Thin adapter over :func:`pathmc._ci.partial_correlation_ci`, which
-    drops rows with any missing value (null or float NaN) in the involved
-    columns and uses rank-aware degrees of freedom. Returns
-    (partial_r, p_value, n_obs); tests the engine cannot run (too few
-    complete observations, zero variance, non-positive degrees of
-    freedom) surface as (nan, nan, n_obs). Rank collapse is not a skip:
-    it is reported on :func:`test_implications` via ``effective_k``.
-    """
-    result = _partial_correlation_result(data, x, y, z_vars)
-    if result.skip_reason is not None:
-        return np.nan, np.nan, result.n
-    assert result.r is not None and result.p is not None  # narrowing
-    return result.r, result.p, result.n
 
 
 def _blocks_all_backdoor_paths(

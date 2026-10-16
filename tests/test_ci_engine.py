@@ -14,10 +14,11 @@
 """Tests for the shared partial-correlation CI engine (#276 / #278).
 
 The characterization classes pin the behavior of the two pre-existing
-implementations — ``identify._partial_correlation_test`` and
-``falsify._PartialCorrelationTester`` — on well-conditioned inputs, so the
-engine unification can demonstrate "no behavior change for well-conditioned
-inputs" against a recorded baseline rather than by algebra alone.
+implementations — ``identify._partial_correlation_result`` (a
+:class:`~pathmc._ci.CIResult`) and ``falsify._PartialCorrelationTester`` —
+on well-conditioned inputs, so the engine unification can demonstrate
+"no behavior change for well-conditioned inputs" against a recorded
+baseline rather than by algebra alone.
 """
 
 import dataclasses
@@ -31,7 +32,7 @@ import pytest
 import pathmc
 from pathmc._ci import CIResult, partial_correlation_ci
 from pathmc.falsify import _PartialCorrelationTester
-from pathmc.identify import _partial_correlation_test
+from pathmc.identify import _partial_correlation_result
 
 # Values recorded from both implementations at aa80e4d (pre-unification).
 # The two implementations agree bitwise on these inputs; the pins use a
@@ -87,7 +88,7 @@ def data_with_nans(frame) -> nw.DataFrame:
 
 
 class TestIdentifyCharacterization:
-    """Pin ``identify._partial_correlation_test`` on well-conditioned inputs."""
+    """Pin the named-column CIResult on well-conditioned inputs."""
 
     @pytest.mark.parametrize(
         "x,y,z,expected",
@@ -95,18 +96,22 @@ class TestIdentifyCharacterization:
         ids=["marginal", "one-conditioner", "two-conditioners", "independent-pair"],
     )
     def test_pinned_values(self, data, x, y, z, expected):
-        r, p, n = _partial_correlation_test(data, x, y, list(z))
+        result = _partial_correlation_result(data, x, y, list(z))
         exp_r, exp_p, exp_n = expected
-        assert r == _approx(exp_r)
-        assert p == _approx(exp_p)
-        assert n == exp_n
+        assert isinstance(result, CIResult)
+        assert result.r == _approx(exp_r)
+        assert result.p == _approx(exp_p)
+        assert result.n == exp_n
+        assert result.requested_k == len(z)
+        assert result.rank_collapsed is False
 
     def test_nan_rows_dropped(self, data_with_nans):
-        r, p, n = _partial_correlation_test(data_with_nans, "X", "Y", ["M"])
+        result = _partial_correlation_result(data_with_nans, "X", "Y", ["M"])
         exp_r, exp_p, exp_n = NAN_CASE_EXPECTED
-        assert r == _approx(exp_r)
-        assert p == _approx(exp_p)
-        assert n == exp_n
+        assert result.r == _approx(exp_r)
+        assert result.p == _approx(exp_p)
+        assert result.n == exp_n
+        assert result.rank_collapsed is False
 
 
 class TestFalsifyCharacterization:
@@ -133,14 +138,15 @@ class TestImplementationParity:
     def test_p_values_agree(self, data):
         tester = _PartialCorrelationTester(data, ["X", "M", "Y", "Z1", "Z2"])
         for x, y, z in WELL_CONDITIONED_CASES:
-            _, p_identify, _ = _partial_correlation_test(data, x, y, list(z))
-            p_falsify = tester.p_value(x, y, z)
-            assert p_identify == _approx(p_falsify, rel=1e-12)
+            result = _partial_correlation_result(data, x, y, list(z))
+            assert result.p == _approx(tester.p_value(x, y, z), rel=1e-12)
+            assert result.rank_collapsed is False
 
     def test_p_values_agree_with_nans(self, data_with_nans):
-        _, p_identify, _ = _partial_correlation_test(data_with_nans, "X", "Y", ["M"])
+        result = _partial_correlation_result(data_with_nans, "X", "Y", ["M"])
         tester = _PartialCorrelationTester(data_with_nans, ["X", "M", "Y"])
-        assert p_identify == _approx(tester.p_value("X", "Y", ("M",)), rel=1e-12)
+        assert result.p == _approx(tester.p_value("X", "Y", ("M",)), rel=1e-12)
+        assert result.rank_collapsed is False
 
 
 class TestImplicationsEndToEndCharacterization:
@@ -161,7 +167,9 @@ class TestImplicationsEndToEndCharacterization:
             "x",
             "y",
             "conditioning_set",
+            "requested_k",
             "effective_k",
+            "rank_collapsed",
             "df",
             "partial_corr",
             "p_value",
@@ -204,6 +212,8 @@ class TestCoreWellConditioned:
         assert result.r == _approx(exp_r)
         assert result.p == _approx(exp_p)
         assert result.n == exp_n
+        assert result.requested_k == len(z)
+        assert result.rank_collapsed is False
         assert result.df == exp_n - len(z) - 2
 
     def test_zero_column_z_is_marginal(self, frame):
@@ -235,6 +245,11 @@ class TestCoreRankAwareDf:
         assert const.skip_reason is None
         assert const.df == marginal.df
         assert const.p == _approx(marginal.p)
+        assert const.requested_k == 1
+        assert const.effective_k == 0
+        assert const.rank_collapsed is True
+        assert marginal.requested_k == 0
+        assert marginal.rank_collapsed is False
 
     def test_duplicate_conditioner_idempotent(self, frame):
         x, y = frame["X"].to_numpy(), frame["Y"].to_numpy()
@@ -243,6 +258,11 @@ class TestCoreRankAwareDf:
         doubled = partial_correlation_ci(x, y, np.column_stack([z, z]))
         assert doubled.df == single.df
         assert doubled.p == _approx(single.p)
+        assert doubled.requested_k == 2
+        assert doubled.effective_k == 1
+        assert doubled.rank_collapsed is True
+        assert single.requested_k == 1
+        assert single.rank_collapsed is False
 
     def test_collinear_conditioner_counts_once(self, frame):
         x, y = frame["X"].to_numpy(), frame["Y"].to_numpy()
@@ -252,6 +272,9 @@ class TestCoreRankAwareDf:
         result = partial_correlation_ci(x, y, collinear)
         assert result.df == single.df
         assert result.p == _approx(single.p)
+        assert result.requested_k == 2
+        assert result.rank_collapsed is True
+        assert single.rank_collapsed is False
 
     def test_rank_deficient_z_keeps_small_sample_viable(self):
         # n=5 with three identical conditioners: a nominal-k rule (n < k + 3)
@@ -262,6 +285,9 @@ class TestCoreRankAwareDf:
         result = partial_correlation_ci(x, y, z)
         assert result.skip_reason is None
         assert result.df == 2
+        assert result.requested_k == 3
+        assert result.effective_k == 1
+        assert result.rank_collapsed is True
         assert 0.0 <= result.p <= 1.0
 
 
@@ -273,6 +299,8 @@ class TestCoreSkips:
         assert result.skip_reason == "insufficient_observations"
         assert result.n == 2
         assert result.r is None and result.p is None and result.df is None
+        assert result.requested_k == 0
+        assert result.rank_collapsed is False
 
     def test_all_rows_nan(self):
         x = np.array([np.nan, np.nan, np.nan])
@@ -291,6 +319,9 @@ class TestCoreSkips:
         z = rng.normal(size=(3, 2))
         result = partial_correlation_ci(x, y, z)
         assert result.skip_reason == "nonpositive_df"
+        assert result.requested_k == 2
+        assert result.effective_k is None
+        assert result.rank_collapsed is False
 
     def test_zero_residual_variance(self):
         # All-zero x gives an exactly-zero lstsq solution and exactly-zero
@@ -300,6 +331,8 @@ class TestCoreSkips:
         z = rng.normal(size=(50, 1))
         result = partial_correlation_ci(np.zeros(50), rng.normal(size=50), z)
         assert result.skip_reason == "zero_residual_variance"
+        assert result.requested_k == 1
+        assert result.rank_collapsed is False
 
     def test_no_warnings_on_degenerate_input(self):
         rng = np.random.default_rng(3)
@@ -332,23 +365,28 @@ class TestCIResultContract:
 
 
 # ---------------------------------------------------------------------------
-# identify._partial_correlation_test delegates to the shared core
+# identify._partial_correlation_result returns the shared CIResult
 # ---------------------------------------------------------------------------
 
 
 class TestIdentifyDelegation:
-    """The identify adapter inherits the core's guarantees (#276)."""
+    """The named-column adapter inherits the core's guarantees (#276)."""
 
     def test_constant_conditioner_equals_marginal(self, frame):
         # The #276 reproducer: conditioning on a constant must be
-        # equivalent to the marginal test.
+        # equivalent to the marginal test, and must say the set collapsed.
         df = frame.copy()
         df["C"] = 1.0
         data = nw.from_native(df, eager_only=True)
-        r_m, p_m, _ = _partial_correlation_test(data, "X", "Y", [])
-        r_c, p_c, _ = _partial_correlation_test(data, "X", "Y", ["C"])
-        assert r_c == _approx(r_m)
-        assert p_c == _approx(p_m)
+        marginal = _partial_correlation_result(data, "X", "Y", [])
+        const = _partial_correlation_result(data, "X", "Y", ["C"])
+        assert isinstance(const, CIResult)
+        assert const.r == _approx(marginal.r)
+        assert const.p == _approx(marginal.p)
+        assert const.requested_k == 1
+        assert const.effective_k == 0
+        assert const.rank_collapsed is True
+        assert marginal.rank_collapsed is False
 
     def test_rank_deficient_small_sample_returns_result(self):
         # n=5 with three identical conditioners: the nominal-k refusal
@@ -363,10 +401,14 @@ class TestIdentifyDelegation:
             "Z3": base,
         })
         data = nw.from_native(df, eager_only=True)
-        r, p, n = _partial_correlation_test(data, "X", "Y", ["Z1", "Z2", "Z3"])
-        assert not np.isnan(p)
-        assert 0.0 <= p <= 1.0
-        assert n == 5
+        result = _partial_correlation_result(data, "X", "Y", ["Z1", "Z2", "Z3"])
+        assert result.skip_reason is None
+        assert result.p is not None and 0.0 <= result.p <= 1.0
+        assert result.n == 5
+        assert result.requested_k == 3
+        assert result.effective_k == 1
+        assert result.rank_collapsed is True
+        assert result.df == 2
 
     def test_perfect_correlation_p_zero_without_warnings(self):
         rng = np.random.default_rng(8)
@@ -375,11 +417,13 @@ class TestIdentifyDelegation:
         data = nw.from_native(df, eager_only=True)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            r, p, _ = _partial_correlation_test(data, "X", "Y", ["Z"])
-        assert p == 0.0
-        assert r == pytest.approx(1.0)
+            result = _partial_correlation_result(data, "X", "Y", ["Z"])
+        assert result.p == 0.0
+        assert result.r == pytest.approx(1.0)
+        assert result.rank_collapsed is False
+        assert result.requested_k == 1
 
-    def test_degenerate_input_returns_nan_without_warnings(self):
+    def test_degenerate_input_is_a_skip_without_warnings(self):
         rng = np.random.default_rng(9)
         df = pd.DataFrame({
             "X": np.zeros(50),
@@ -389,9 +433,12 @@ class TestIdentifyDelegation:
         data = nw.from_native(df, eager_only=True)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            r, p, n = _partial_correlation_test(data, "X", "Y", ["Z"])
-        assert np.isnan(r) and np.isnan(p)
-        assert n == 50
+            result = _partial_correlation_result(data, "X", "Y", ["Z"])
+        assert result.skip_reason == "zero_residual_variance"
+        assert result.r is None and result.p is None
+        assert result.n == 50
+        assert result.requested_k == 1
+        assert result.rank_collapsed is False
 
 
 def _constant_conditioner_frame() -> pd.DataFrame:
@@ -424,23 +471,49 @@ class TestRankCollapseIsVisible:
             const = partial_correlation_ci(x, y, np.ones((len(x), 1)))
             doubled = partial_correlation_ci(x, y, np.column_stack([z, z]))
         assert marginal.effective_k == 0
+        assert marginal.requested_k == 0
+        assert marginal.rank_collapsed is False
         assert const.effective_k == 0
+        assert const.requested_k == 1
+        assert const.rank_collapsed is True
         assert const.df == marginal.df == len(x) - 2
         assert doubled.effective_k == 1
+        assert doubled.requested_k == 2
+        assert doubled.rank_collapsed is True
         assert doubled.df == len(x) - doubled.effective_k - 2
 
     def test_skip_has_no_effective_k(self):
         result = partial_correlation_ci(np.array([1.0, 2.0]), np.array([2.0, 1.0]))
         assert result.effective_k is None
+        assert result.requested_k == 0
+        assert result.rank_collapsed is False
 
-    def test_adapter_stays_a_triple_and_does_not_warn(self):
+    def test_skip_with_conditioners_is_not_rank_collapsed(self):
+        # Too few rows to run. requested_k is known, but a skip is not a
+        # weaker version of the requested independence.
+        result = partial_correlation_ci(
+            np.array([1.0, 2.0]),
+            np.array([2.0, 1.0]),
+            np.ones((2, 1)),
+        )
+        assert result.skip_reason == "insufficient_observations"
+        assert result.requested_k == 1
+        assert result.effective_k is None
+        assert result.rank_collapsed is False
+
+    def test_named_adapter_reports_collapse_without_warning(self):
         data = nw.from_native(_constant_conditioner_frame(), eager_only=True)
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            r, p, n = _partial_correlation_test(data, "M", "X", ["C"])
-        assert n == 50
-        assert not np.isnan(p)
-        assert r == _approx(_partial_correlation_test(data, "M", "X", [])[0])
+            collapsed = _partial_correlation_result(data, "M", "X", ["C"])
+            marginal = _partial_correlation_result(data, "M", "X", [])
+        assert isinstance(collapsed, CIResult)
+        assert collapsed.n == 50
+        assert collapsed.rank_collapsed is True
+        assert collapsed.requested_k == 1
+        assert collapsed.effective_k == 0
+        assert collapsed.r == _approx(marginal.r)
+        assert marginal.rank_collapsed is False
 
     def test_implications_frame_and_single_warning(self):
         frame = _constant_conditioner_frame()
@@ -450,6 +523,7 @@ class TestRankCollapseIsVisible:
             result = model.test_implications()
         collapses = [w for w in caught if issubclass(w.category, UserWarning)]
         assert len(collapses) == 1
+        assert "/pathmc/" not in collapses[0].filename
         assert "rank collapse" in str(collapses[0].message)
         assert "M ⊥⊥ X | {C}" in str(collapses[0].message)
         assert "M ⊥⊥ Z | {C, X}" in str(collapses[0].message)
@@ -459,18 +533,29 @@ class TestRankCollapseIsVisible:
             for row in result.results.itertuples(index=False)
         }
         only_c = by_pair[("M", "X", "C")]
+        assert only_c.requested_k == 1
         assert only_c.effective_k == 0
+        assert only_c.rank_collapsed
         assert only_c.df == only_c.n_obs - 2
         both = by_pair[("M", "Z", "C, X")]
+        assert both.requested_k == 2
         assert both.effective_k == 1
+        assert both.rank_collapsed
         assert both.df == both.n_obs - both.effective_k - 2
         # C is constant, so the marginal C ⊥⊥ X test is skipped outright
         # (zero variance) rather than reported as a rank collapse.
         skipped = by_pair[("C", "X", "")]
+        assert skipped.requested_k == 0
+        assert not skipped.rank_collapsed
         assert np.isnan(skipped.effective_k)
         assert np.isnan(skipped.p_value)
-        assert "[effective_k=0]" in result._repr_html_()
-        assert "[effective_k=1]" in result._repr_html_()
+        html = result._repr_html_()
+        assert "All implied independences are consistent" not in html
+        assert "rank-collapsed" in html
+        assert "did not test" in html
+        assert "[effective_k=0]" in html
+        assert "[effective_k=1]" in html
+        assert "rank-collapsed" in repr(result)
 
     def test_well_conditioned_implications_do_not_warn(self, frame):
         model = pathmc.model("M ~ X\nY ~ M", data=frame[["X", "M", "Y"]])
@@ -478,9 +563,14 @@ class TestRankCollapseIsVisible:
             warnings.simplefilter("error")
             result = model.test_implications()
         row = result.results.iloc[0]
+        assert row["requested_k"] == 1
         assert row["effective_k"] == 1
+        assert not row["rank_collapsed"]
         assert row["df"] == row["n_obs"] - row["effective_k"] - 2
-        assert "effective_k" not in result._repr_html_()
+        html = result._repr_html_()
+        assert "effective_k" not in html
+        assert "rank-collapsed" not in html
+        assert "rank-collapsed" not in repr(result)
 
     def test_falsify_warns_once_for_the_given_dag(self):
         frame = _constant_conditioner_frame()
@@ -494,15 +584,21 @@ class TestRankCollapseIsVisible:
             if issubclass(w.category, UserWarning) and "rank collapse" in str(w.message)
         ]
         assert len(collapses) == 1
-        collapsed = result.local_violations[
-            result.local_violations["effective_k"]
-            < result.local_violations["conditioning_set"].map(
-                lambda text: 0 if text == "" else len(text.split(", "))
-            )
-        ]
+        assert "/pathmc/" not in collapses[0].filename
+        collapsed = result.local_violations[result.local_violations["rank_collapsed"]]
         assert set(collapsed["conditioning_set"]) == {"C"}
+        assert (collapsed["requested_k"] == 1).all()
         assert (collapsed["effective_k"] == 0).all()
         assert (collapsed["df"] == len(frame) - 2).all()
+        summary = "\n".join(result._summary_lines())
+        assert "rank-collapsed" in summary
+        assert "requested parent sets" in summary
+        assert "Verdict: we do not reject the DAG." not in summary
+        html = result._repr_html_()
+        assert "rank-collapsed" in html
+        assert "requested parent sets" in html
+        assert "LMC violations (given DAG)" in html
+        assert "rank-collapsed" in repr(result)
 
     def test_falsify_full_rank_parents_do_not_warn(self, frame):
         model = pathmc.model("M ~ X\nY ~ M", data=frame[["X", "M", "Y"]])
@@ -511,3 +607,9 @@ class TestRankCollapseIsVisible:
             result = model.falsify(n_permutations=6, random_seed=0)
         assert "effective_k" in result.local_violations.columns
         assert "df" in result.local_violations.columns
+        assert "requested_k" in result.local_violations.columns
+        assert "rank_collapsed" in result.local_violations.columns
+        assert not result.local_violations["rank_collapsed"].any()
+        assert "rank-collapsed" not in "\n".join(result._summary_lines())
+        assert "rank-collapsed" not in result._repr_html_()
+        assert "rank-collapsed" not in repr(result)
