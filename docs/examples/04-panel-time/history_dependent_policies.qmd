@@ -9,9 +9,9 @@ jupyter: pathmc
 
 A history-dependent treatment policy chooses the next action from the history the intervention itself would have produced. A fixed schedule cannot do that: the dose was written down before the first step, so it cannot react when earlier treatment changes the state.
 
-The ideas, the limits, and the identification assumptions are on [History-Dependent Treatment Policies](../../../user-guide/history-dependent-policies.qmd). Read that page if `policy=`, `current()`, or sequential positivity is new. This notebook does not repeat the contract. It compares three predeclared rules as levels, then two calculations that answer a different question. The subtracted posterior, and the Monte Carlo error of that difference, are the contrast snippet on the concepts page.
+The ideas, the limits, and the identification assumptions are on [History-Dependent Treatment Policies](../../../user-guide/history-dependent-policies.qmd). Read that page if `policy=`, `current()`, or sequential positivity is new. This notebook does not repeat that page. It compares three predeclared rules as levels, then two calculations that answer a different question. The subtracted posterior, and the Monte Carlo error of that difference, are the contrast snippet on the concepts page.
 
-The example is a synthetic greenhouse, not agronomic advice. Twelve plots, thirty days, a binary watering dose. Stress is an unbounded index, not a moisture percentage. Heat is external weather. Growth is daily net growth. Watering is the picture. The same call evaluates any rule that fits the contract.
+The example is a synthetic greenhouse, not agronomic advice. Twelve plots, thirty days, a binary watering dose. Stress is an unbounded index, not a moisture percentage. Heat is external weather. Growth is daily net growth. Watering is the picture. The same call evaluates any rule listed under [Current functionality](../../../user-guide/history-dependent-policies.qmd#current-functionality).
 
 What this notebook does:
 
@@ -317,4 +317,4 @@ The zero-noise and noisy known-parameter numbers are exploratory. They are a 12-
 
 A causal reading of these comparisons needs sequential exchangeability, consistency, treatment support over relevant histories, model adequacy, and no cross-unit interference. Static backdoor checks do not prove longitudinal identification. A marginal min/max warning does not establish sequential positivity: the dose has to be supportable on the stress histories the rule visits, not merely inside the observed stress range.
 
-`policy=` does not fit an assignment model, optimize a threshold, or accept a Python callback. Latent variables, non-Gaussian families, adstock and other transforms, basis or HSGP terms, any categorical term, and residual covariance are rejected rather than run on a weaker executor. `kind="predictive"` is not a noise-free policy mode. The contract for those refusals is on [History-Dependent Treatment Policies](../../../user-guide/history-dependent-policies.qmd).
+`policy=` does not fit an assignment model, optimize a threshold, or accept a Python callback. Latent variables, non-Gaussian families, adstock and other transforms, basis or HSGP terms, any categorical term, and residual covariance are not available for a policy yet; pathmc raises an error rather than running them on a weaker executor. `kind="predictive"` is the wrong shape for this operator, not a missing noise-free mode. [Current functionality](../../../user-guide/history-dependent-policies.qmd#current-functionality) separates the two.

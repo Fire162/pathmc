@@ -1,14 +1,38 @@
 ---
 title: "History-Dependent Treatment Policies"
 guide-section: "Panel Data"
-description: "Why a treatment rule that reacts to simulated history is a different question from a fixed schedule, and the contract for evaluating one inside a fitted Gaussian panel model."
+description: "What intervening with a policy can answer that a static do() value cannot, and what that operator can evaluate today inside a fitted Gaussian panel."
 categories: [Panel Data, Causal Inference]
 jupyter: pathmc
 ---
 
-Most interventions in pathmc are static. `do(set=)` replaces a treatment with a value, or with a schedule, that was chosen before the first time step. The dose at week 10 does not depend on what the model says happened in week 9.
+The ordinary `do()` operator intervenes with a static value. It replaces a variable with a number, or with a list of numbers, chosen before the first step. Water every third day. Hold the price at 12. Assign the dose on day 14. A policy is the other kind of intervention: the dose at each step is a rule of the state the intervention itself just produced. [Why panel interventions need time-forward simulation](19-panel-interventions.qmd) carries a static schedule forward when yesterday's outcome feeds today. A time-forward schedule still cannot look at the state it produces and choose the next dose. That is the gap `policy=` fills.
 
-A history-dependent policy is a different question. The action at time *t* is a rule of the history the intervention itself would have produced. Water if yesterday's stress was high. Start treatment if this month's biomarker has crossed a line. Raise the price if last period's demand was soft. Today's action changes tomorrow's state, and tomorrow's state chooses tomorrow's action. A schedule copied from the observed path, or a threshold applied to the conditional mean of that state, is not that question.
+Most interventions in pathmc are that first kind. `do(set=)` writes the static value in before time starts. The dose at week 10 does not depend on what the model says happened in week 9.
+
+A history-dependent policy is the second kind. The action at time *t* is a rule of the history the intervention itself would have produced. Today's action changes tomorrow's state, and tomorrow's state chooses tomorrow's action. A schedule copied from the observed path, or a threshold applied to the conditional mean of that state, is not that question.
+
+## What this lets you ask
+
+**`do(set=)` intervenes with a static value. `policy=` intervenes with a rule.** That is the whole distinction. A static value answers "what if this column had been these numbers." A policy answers "what if we had followed this rule," including the states the rule itself would have produced. The second question is the one a protocol, a controller, or a pricing rule actually decides. The state in front of them is not the state in the data. If they acted yesterday, today's state is not the state you recorded, so today's dose is not the dose you would have copied from the observed path.
+
+A static number is the right intervention when the dose really was chosen in advance. A policy is the right intervention when the dose is a reaction to a state the dose itself can change. That shape shows up in a lot of places:
+
+- **A thermostat, not a timer.** Heat when this morning's temperature was below the setpoint, instead of heating from 6am to 9am whether the room is already warm. Heating changes the temperature the next decision reads, so the hours a thermostat would have run are not the hours on the timer.
+- **Irrigation.** Water when stress crosses 0.5, instead of every third day. Early watering changes later stress, so the two rules do not visit the same states. The [greenhouse example](../docs/examples/panel-time/history_dependent_policies.qmd) is this question, worked as a fixed schedule against two thresholds. Stress there is a teaching index, not agronomic advice.
+- **A reorder point.** Order when yesterday's stock fell below a line, instead of ordering a fixed quantity every Monday. An order changes the stock the next order reads. A Monday quantity copied from the observed stock path cannot react to a stockout the new orders would have prevented.
+- **A treatment protocol.** Assign a numeric dose when a biomarker crosses a line, instead of starting everyone on day 14. Treatment moves the biomarker, so later decisions are not the ones you would have copied from the observed series. This is the shape of the dynamic antiretroviral strategies in [@young2011gformula].
+- **A retention offer.** Discount when last month's usage dropped, instead of discounting every March. The discount changes next month's usage, which changes whether you discount again.
+- **A price rule.** Raise the price when last period's demand was soft, instead of holding the price at 12. The higher price changes next period's demand, which changes the next price.
+- **A toll, or a credit limit.** Raise the toll when last period's speed was low, or tighten the limit when utilization was high. In both cases the action changes the state the next action reads. A calendar fitted to the observed speeds, or to the observed utilization, cannot.
+
+The pattern is the same in each case. The interesting intervention is not a number you can write down before the first step. It is a rule whose later doses depend on states earlier doses changed. Copying those doses out of the observed data and replaying them with `do(set=)` drops that feedback. It answers a different question.
+
+pathmc compares policies you already regard as candidates. Water at 0.3 versus water at 0.5, or a fixed calendar versus a responsive rule. It does not find the optimal rule. Two policies can share the posterior, the process noise, and the baseline, so the difference is one paired draw rather than two unrelated fits. A static `do(set=)` cannot give you that comparison, because the state the rule reads is a state the rule changed.
+
+These are the questions. The version that runs today needs a numeric dose in a Gaussian panel that already has a lag. [Current functionality](#current-functionality) says what is implemented and what is not yet.
+
+[Why the rule has to run inside the model](#why-the-rule-has-to-run-inside-the-model) says why a copied calendar and a threshold on the average are not shortcuts to the same answer.
 
 The sketch below is the shape of the call, not a complete script. It assumes a fitted panel and that `n_times` is 6, the length of the schedule. The names in the call are defined after the sketch. This sketch waters on yesterday's stress. The notebook waters on today's stress. Those are different questions.
 
@@ -39,7 +63,7 @@ If you are new to pathmc, read this page as a map, not as the first tutorial. Yo
 :::: {.callout-important}
 ## This is a narrow, advanced feature
 
-`policy=` evaluates a rule you already wrote. It does not search for the best threshold, fit an assignment model, or accept a Python function as the rule. The supported models are Gaussian panels that already have a time loop. Latent variables, non-Gaussian families, adstock and other transforms, basis or HSGP terms, any categorical term, and residual covariance are refused rather than run on a weaker simulator. Do not add a scientifically meaningless `lag()` just to unlock the argument.
+`policy=` evaluates a rule you already wrote. It does not search for the best threshold, fit an assignment model, or accept a Python function as the rule. What runs today is a Gaussian panel that already has a time loop. Several model features are not available for a policy yet, and pathmc raises an error rather than answering them with a weaker simulator. [Current functionality](#current-functionality) separates those from the things this operator will not become. Do not add a scientifically meaningless `lag()` just to unlock the argument.
 ::::
 
 ## Why the rule has to run inside the model
@@ -97,7 +121,7 @@ where((previous("stress") > 0.5) & ~(previous("water") == 1.0), 1.0, 0.0)
 
 `initial` is the pre-sample state, in business units: the units of the data, not scaled model units. Missing lag bases and missing `previous()` names are errors. A name that is not a fitted variable is an error. An extra fitted name is not an error: it is stored on the contrast baseline and does not enter the time loop unless a lag or a `previous()` read uses it. Omit outcomes the rule does not read, or pass the same extra keys on every call you will subtract. A scalar is copied to every fitted unit. A mapping must contain exactly the fitted unit labels; pathmc matches labels, not row order. Pass the same explicit baseline to `model()` and to `do()` when the rule is adaptive. The legacy fill, used when `initial` is omitted at fit time, is not a scientific baseline. In the greenhouse spec, `stress` and `water` are the lag bases, so they belong in `initial`. `growth` is an outcome the rule does not read: including it is legal, then required on every later contrast, and unused in the time loop. `heat` is the same kind of extra key. A typo is not a fitted variable and errors.
 
-## Contract
+## Current functionality
 
 `policy` must be a `TreatmentPolicy`. The model must be a scan-compiled Gaussian lag panel. Anything else is an error that names `do(set=)` or the unsupported piece, not a silent fallback.
 
@@ -111,28 +135,51 @@ where((previous("stress") > 0.5) & ~(previous("water") == 1.0), 1.0, 0.0)
 - `simulate_over="time"` and an explicit `horizon` equal to the fitted length
 - `n_simulations` of at least 2
 
-### Refused
+### Not in this version
 
-These raise an error. pathmc does not fall back to a weaker executor.
+These are not impossible questions. They are not implemented for `policy=` yet. The error says "in v1" and names the piece. pathmc will not answer them with a second simulator that might disagree with the fitted model.
 
-- Non-Gaussian families
-- Latent variables
-- Python callbacks, `if`, `and`, `or`, and `not`
-- Adstock and other transforms
-- Basis or HSGP terms
-- Any categorical term, not only a categorical treatment
-- Residual covariance (`~~`)
-- `kind="predictive"`
+- Non-Gaussian families. pathmc can fit them. A policy cannot evaluate them yet.
+- Latent variables. A panel can have them. A policy cannot read them yet.
+- Adstock and other transforms. A static `do(set=)` can already carry an adstock schedule forward. A policy cannot yet run inside a model that has one.
+- Categorical terms, not only a categorical treatment. Not implemented for a policy yet.
+- Basis or HSGP terms. Not available yet on the scan panel a policy has to run inside, so there is no such model to attach a policy to.
+- Residual covariance (`~~`). Same limit: not available yet on a scan panel, so not available on a policy.
 
-A fixed `TimeSchedule` with no residual noise matches `do(set=..., kind="mean")`. With noise, a threshold on a stochastic state does not match that noise-free path. The reported mean averages posterior draws and simulations. A mean-substitution implementation, which plugs the conditional mean in for the random state before applying the threshold, is not this estimand.
+### Not a missing feature
+
+These are not waiting on a later version. They are the wrong shape for this operator.
+
+- A Python function as the rule, and Python `if`, `and`, `or`, and `not`. The rule is an array expression, evaluated for every unit and every posterior draw at once. Those Python forms do not build that expression. Use `where`, `&`, `|`, and `~`.
+- `kind="predictive"`. A policy path always includes process noise, so there is no separate noise-free policy mode. Zeroing the noise and then applying the threshold is a different question, not a quieter version of this one.
+- Searching for the best threshold, or fitting an assignment model. This operator evaluates a rule you already wrote. Finding the rule is a different literature, covered in [Where this sits, and what pathmc does not replace](#where-this-sits-and-what-pathmc-does-not-replace).
+
+A fixed `TimeSchedule` with the process noise removed matches `do(set=..., kind="mean")`. With noise left in, a threshold on a stochastic state does not match that noise-free path. Plugging the conditional mean in for the random state before applying the threshold is not this estimand.
 
 ## What the result keeps
 
-Population summaries are means over units and simulations. Their dims are `(time, chain, draw)`. The chain and draw dimensions are not averaged away.
+The average is not over the MCMC sample. The MCMC sample is what you keep. What gets averaged is the repeated simulation of each draw, and the units in the panel.
 
-`simulation_mcse(var)` is the Monte Carlo standard error within each posterior draw. It keeps `chain` and `draw`, and it keeps `time` until you reduce time yourself. `aggregate_time(var, reduction="sum"|"mean"|"last")` is the cumulative or terminal estimand. Call it before you treat a path as one number. Pass `keep_trajectories=True` for unit paths; those dims are `(chain, draw, simulation, unit, time)`. `simulation_info()` returns a `PolicySimulationInfo`: the identity of the run, including the target, the fitted horizon, the unit population, and the seed. Read `simulation_info().seed` when you need to reuse the seed that was drawn.
+A policy reads a noisy state, so one posterior draw is not one path. For each chain and each draw, pathmc resimulates the panel `n_simulations` times. The default is 256, and it must be at least 2. The raw state, before any averaging, has five axes: chain, draw, simulation, unit, and time. You only get that array if you pass `keep_trajectories=True`. Its dims are `(chain, draw, simulation, unit, time)`.
 
-Contrast two policy results only when they share the posterior, the baseline, the retained exogenous inputs, the seed, the horizon, and the simulation count. Subtracting the results is the paired difference. It does not declare a winner. Report the outcome and the treatment separately: a rule can grow more biomass by using more water, and those are two claims.
+`model.do()` then reduces that array in a fixed order, and stops before the posterior:
+
+1. Average over units. Each simulation is now one series per posterior draw, not one series per greenhouse, customer, or patient. Dims `(time, chain, draw, simulation)`. That array is `result.simulation_draws`.
+2. Average over simulations. That is the number on the result you get back. Dims `(time, chain, draw)`.
+
+`time` is the fitted horizon, one value per period. `chain` and `draw` are the MCMC sample. They are still there. Nothing in the default result has collapsed the posterior into a point. If you want to see the axes rather than trust this paragraph, `result.dataset["growth"].dims` is `("time", "chain", "draw")`.
+
+`result.mean("growth")` and `result.hdi("growth")` are the MCMC summaries, and both average `time` away first. On the default result, `mean` is one number: the posterior mean of the per-period average, not the mean of the total, and not a path. `hdi` is the interval of that same time-averaged quantity. A path is `result.by_time("growth")`, shape `(n_times, n_samples)`, time on the first axis and the chains and draws stacked on the second. A total is `aggregate_time` first, then `mean`.
+
+`aggregate_time("growth", reduction="sum")` drops `time` before that summary. `sum` is the total over the horizon, `mean` is the per-period average, `last` is the final period. The returned object has dims `(chain, draw)`. `growth.mean("growth")` on that object is the posterior mean of the total, because there is no time axis left to average. `growth.hdi("growth")` is the interval across chains and draws.
+
+`simulation_mcse("growth")` does not average the posterior, and it is not that interval. Inside each chain and draw, it takes the standard deviation across simulations and divides by the square root of the simulation count. That is how noisy the simulation average is for that one posterior draw. Called before `aggregate_time`, it keeps `time`, so you get one error per period. Called after, it has dims `(chain, draw)`: one error per posterior draw of the total. If that error is large next to the posterior spread, raise `n_simulations`. Drawing more MCMC samples does not shrink it.
+
+`simulation_info()` is not a summary of the outcome. It is the identity of the run: which rule, which column, how many simulations, the horizon, the units, and the seed. Read `simulation_info().seed` when a call omitted `random_seed` and you need to reuse the seed pathmc drew.
+
+Contrast two policy results only when they share the posterior, the baseline, the retained exogenous inputs, the seed, the horizon, and the simulation count. Subtracting the results subtracts the already-averaged arrays, draw by draw. The difference still has dims `(time, chain, draw)`. It does not declare a winner. Report the outcome and the treatment separately: a rule can grow more biomass by using more water, and those are two claims.
+
+The snippet is that contrast for the sketch. `shared` is what makes the subtraction paired. `schedule_result` and `responsive_result` are the default summaries, dims `(time, chain, draw)` on each variable. `contrast` is the same shape: responsive minus calendar, at each time, chain, and draw. `growth` and `water` drop time by summing it, so each is a `(chain, draw)` array of totals.
 ```python
 baseline = {"water": 0.0, "stress": 0.6}
 shared = dict(
@@ -147,6 +194,7 @@ contrast = responsive_result - schedule_result
 growth = contrast.aggregate_time("growth", reduction="sum")
 water = contrast.aggregate_time("water", reduction="sum")
 ```
+`growth.mean("growth")` is then one number, the posterior mean of the total growth difference. `growth.hdi("growth")` is the interval across chains and draws. `growth.simulation_mcse("growth")` is still an array with dims `(chain, draw)`: the Monte Carlo error of each draw's total, not an interval for the mean. `water` is the same reduction for the dose, so a rule that grows more by using more water shows up as two totals, not one.
 
 :::: {.callout-warning}
 ## Two calculations that feel like the policy and are not
