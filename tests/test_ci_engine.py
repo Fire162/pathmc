@@ -729,6 +729,16 @@ class TestRankCollapseIsVisible:
         text = "\n".join(result._summary_lines())
         assert "Every requested parental independence rank-collapsed" in text
         assert "fully connected" not in text
+        html = result._repr_html_()
+        assert "every requested parental independence rank-collapsed" in html
+        assert "implies no testable" not in html
+        assert "not violations" in html
+        compact = repr(result)
+        assert "not_evaluable" in compact
+        assert "rank-collapsed" in compact
+        assert "\n" not in compact
+        with pytest.raises(RuntimeError, match="rank-collapsed"):
+            result.plot()
 
     def test_falsify_full_rank_parents_do_not_warn(self, frame):
         model = pathmc.model("M ~ X\nY ~ M", data=frame[["X", "M", "Y"]])

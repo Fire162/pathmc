@@ -218,10 +218,18 @@ class FalsificationResult(ResultReprMixin):
             mask &= ~frame["rank_collapsed"].fillna(False).astype(bool)
         return frame.loc[mask].copy()
 
+    def _only_rank_collapsed(self) -> bool:
+        """Whether every executed parental test collapsed.
+
+        ``can_evaluate`` is then false, but the DAG did imply parental
+        tests. Those rows are not a saturated graph and not violations.
+        """
+        return self.n_lmc_tests == 0 and n_rank_collapsed(self.local_violations) > 0
+
     def _summary_lines(self) -> list[str]:
         n_collapsed = n_rank_collapsed(self.local_violations)
         if not self.can_evaluate:
-            if n_collapsed:
+            if self._only_rank_collapsed():
                 return [
                     "DAG falsification: cannot be evaluated.",
                     "Every requested parental independence rank-collapsed, "
@@ -272,8 +280,9 @@ class FalsificationResult(ResultReprMixin):
 
     def _repr_compact(self) -> str:
         if not self.can_evaluate:
+            collapsed = ", rank-collapsed" if self._only_rank_collapsed() else ""
             return (
-                f"FalsificationResult(not_evaluable, "
+                f"FalsificationResult(not_evaluable{collapsed}, "
                 f"{self.n_permutations} permutations)"
             )
         if self.falsified:
@@ -292,6 +301,15 @@ class FalsificationResult(ResultReprMixin):
     def _repr_html_(self) -> str:
         """Rich HTML display for Jupyter notebooks."""
         if not self.can_evaluate:
+            if self._only_rank_collapsed():
+                return (
+                    "<h4>DAG Falsification</h4>"
+                    '<p><span style="color: gray;">Cannot be evaluated — '
+                    "every requested parental independence rank-collapsed, "
+                    "so no written parent set was actually tested. Those "
+                    "rows are not violations. Drop the redundant parent "
+                    "and re-test.</span></p>"
+                )
             return (
                 "<h4>DAG Falsification</h4>"
                 '<p><span style="color: gray;">Cannot be evaluated — the DAG '
@@ -379,7 +397,9 @@ class FalsificationResult(ResultReprMixin):
         Raises
         ------
         RuntimeError
-            If the result cannot be evaluated (no LMC tests).
+            If the result cannot be evaluated: no written parental test
+            ran, either because the DAG implies none or because every
+            requested parent set rank-collapsed.
         ValueError
             If *bins* is neither one of the accepted types nor, for an
             integer bin count, positive. Strategy names and bin edges are
@@ -388,6 +408,13 @@ class FalsificationResult(ResultReprMixin):
         import matplotlib.pyplot as plt
 
         if not self.can_evaluate:
+            if self._only_rank_collapsed():
+                raise RuntimeError(
+                    "Cannot plot a falsification result that cannot be "
+                    "evaluated. Every requested parental independence "
+                    "rank-collapsed, so no written parent set was actually "
+                    "tested."
+                )
             raise RuntimeError(
                 "Cannot plot a falsification result that cannot be evaluated. "
                 "The DAG implies no testable conditional independences."
