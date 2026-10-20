@@ -56,12 +56,12 @@ UNIT_LENGTHSCALE_BETA = 1
 
 
 def lengthscale_prior(span: float | None = None) -> Prior:
-    """InverseGamma lengthscale prior in raw input units.
+    """InverseGamma lengthscale prior matched to the compiled column span.
 
     ``InverseGamma(3, 1)`` has mean 0.5, which matches a unit-span input.
-    Mean is ``beta / (alpha - 1)``, so ``beta = span`` keeps that ratio when
-    the column's observed range is known. A missing, constant, or non-finite
-    span keeps the unit default: a zero range has no lengthscale to match.
+    Mean is ``beta / (alpha - 1)``, so ``beta = span`` keeps that ratio.
+    Callers pass the span of the column the basis actually sees, after
+    scaling. A missing, constant, or non-finite span keeps the unit default.
     """
     beta: int | float = UNIT_LENGTHSCALE_BETA
     if span is not None and np.isfinite(span) and span > 0:
