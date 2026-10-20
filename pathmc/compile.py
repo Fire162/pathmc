@@ -593,10 +593,11 @@ def compile_to_pymc(
         used. See :func:`pathmc.priors.default_priors` for the full
         list of parameter keys.
     generative : bool
-        When True (``simulate()`` / ``simulate_params_template()`` only),
-        residual-covariance blocks emit a free joint RV so descendants
-        read realized correlated noise. Estimation must leave this False
-        so the observed MvNormal likelihood is unchanged.
+        When True (``simulate()``, ``simulate_params_template()``, and
+        predictive ``do()`` on residual-covariance models), residual-covariance
+        blocks emit a free joint RV so descendants read realized correlated
+        noise. Estimation must leave this False so the observed MvNormal
+        likelihood is unchanged.
 
     Returns
     -------

@@ -200,6 +200,85 @@ class TestBlockVarDoOperator:
         assert np.isfinite(ate), f"ATE of M1 on Y should be finite, got {ate}"
 
 
+class TestResidualPredictiveDo:
+    """Predictive do() must carry residual-block noise into descendants.
+
+    The estimation graph observes block members, so a wrong implementation
+    samples the descendant from observed parent columns. A hard intervention
+    then leaves the descendant's predictive distribution unchanged, and an
+    unintervened predictive draw omits upstream residual variance.
+    """
+
+    SPEC = "Y1 ~ X\nY2 ~ X\nZ ~ Y1\nY1 ~~ Y2"
+
+    def _model(self) -> pathmc.PathModel:
+        rng = np.random.default_rng(0)
+        n = 80
+        x = rng.normal(size=n)
+        eps = rng.multivariate_normal([0, 0], [[1.0, 0.3], [0.3, 1.0]], size=n)
+        y1 = 0.5 * x + eps[:, 0]
+        y2 = -0.2 * x + eps[:, 1]
+        z = 2.0 * y1 + rng.normal(scale=0.3, size=n)
+        data = pd.DataFrame({"X": x, "Y1": y1, "Y2": y2, "Z": z})
+        return pathmc.model(self.SPEC, data=data)
+
+    def _fitted_point_model(self) -> pathmc.PathModel:
+        import arviz as az
+
+        model = self._model()
+        free = [rv.name for rv in model.pymc_model.free_RVs]
+        with model.pymc_model:
+            prior = pm.sample_prior_predictive(draws=1, random_seed=1)
+        point = prior["prior"].to_dataset().isel(chain=0, draw=0)
+        n_draws = 40
+        posterior = {}
+        for name in free:
+            arr = np.asarray(point[name].values)
+            posterior[name] = np.broadcast_to(arr, (1, n_draws, *arr.shape)).copy()
+        # Slope and intercept both 2: the Y1 contrast isolates the slope.
+        posterior["beta_Z"][...] = 2.0
+        posterior["sigma_Z"][...] = 0.3
+        # Packed lower Cholesky of I_2: each block member has residual sd 1.
+        posterior["chol_Y1_Y2"][...] = np.array([1.0, 0.0, 1.0])
+        model._idata = az.from_dict({"posterior": posterior})
+        return model
+
+    def test_sibling_wires_descendant_through_block_member(self):
+        from pytensor.graph.traversal import ancestors
+
+        model = self._model()
+        sibling = model._predictive_gen_model()
+        names = {getattr(v, "name", None) for v in ancestors([sibling["Z"]])}
+        assert "Y1" in names
+        assert "mu_Y1" not in names
+        assert any(name and str(name).endswith("_joint") for name in names)
+        free = {rv.name for rv in model.pymc_model.free_RVs}
+        observed = {rv.name for rv in model.pymc_model.observed_RVs}
+        assert "Y1" not in free
+        assert "Z" in observed
+        assert model.pymc_model.observed_RVs
+
+    def test_mean_intervention_stays_structural(self):
+        model = self._fitted_point_model()
+        shift = model.do(set={"Y1": 1.0}, kind="mean").mean("Z") - model.do(
+            set={"Y1": 0.0}, kind="mean"
+        ).mean("Z")
+        assert abs(shift - 2.0) < 1e-6, shift
+        draws = model.do(set={"Y1": 1.0}, kind="mean").dataset["Z"].to_numpy()
+        assert np.allclose(draws, draws.flat[0])
+
+    def test_predictive_intervention_shifts_descendant_and_drops_block_noise(self):
+        model = self._fitted_point_model()
+        baseline = model.do(kind="predictive")
+        at0 = model.do(set={"Y1": 0.0}, kind="predictive")
+        at1 = model.do(set={"Y1": 1.0}, kind="predictive")
+        shift = at1.mean("Z") - at0.mean("Z")
+        assert abs(shift - 2.0) < 0.25, shift
+        base_var = float(np.var(baseline.dataset["Z"].to_numpy()))
+        fixed_var = float(np.var(at1.dataset["Z"].to_numpy()))
+        assert base_var > 10 * fixed_var, (base_var, fixed_var)
+
+
 def _panel_residual_cov_data() -> pd.DataFrame:
     rng = np.random.default_rng(42)
     regions = ["North", "South", "East"]
