@@ -1052,7 +1052,7 @@ pm.model_to_graphviz(model.pymc_model)
 
 ### Sample
 
-This fit pins `nuts_sampler="nutpie"`. PyMC's own NUTS (`nuts_sampler="pymc"`) reports well over a thousand divergences here, and the nutpie summary below is still not converged. See [issue #538](https://github.com/pymc-labs/pathmc/issues/538).
+This fit pins `nuts_sampler="nutpie"`, which is the sampler that produced the published sample. Unit intercepts and slopes are sampled as a unit-normal offset; the summary reports the centered effects. The nutpie summary below is still not converged.
 
 ```{python}
 idata = model.fit(
@@ -1076,7 +1076,7 @@ dig_mu_mean = float(dig_sum.loc["mu_slope_sales_digital", "mean"])
 
 #### Population-level coefficients
 
-The visible `mu_slope_sales_digital` and `slope_sales_digital` rows have r-hat up to `{python} f"{dig_rhat:.2f}"` and ESS down to `{python} f"{dig_ess:.0f}"`. Those rows are not geo-level digital effects, and a mean of `{python} f"{dig_mu_mean:.2f}"` is not digital effectiveness. The violins and the digital ATE below are the sums of the fixed digital coefficient and the region slope. See [issue #538](https://github.com/pymc-labs/pathmc/issues/538).
+The visible `mu_slope_sales_digital` and `slope_sales_digital` rows have r-hat up to `{python} f"{dig_rhat:.2f}"` and ESS down to `{python} f"{dig_ess:.0f}"`. Those rows are not geo-level digital effects, and a mean of `{python} f"{dig_mu_mean:.2f}"` is not digital effectiveness. The violins and the digital ATE below are the sums of the fixed digital coefficient and the region slope.
 
 ```{python}
 model.summary()
