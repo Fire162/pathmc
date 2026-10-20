@@ -46,7 +46,7 @@ https://arxiv.org/abs/2305.09565
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from itertools import permutations
 from typing import TYPE_CHECKING
@@ -57,8 +57,12 @@ import numpy as np
 import pandas as pd
 
 from pathmc._ci import _PartialCorrelationTester
+from pathmc._ci_report import (
+    n_rank_collapsed,
+    warn_conditioning_rank_collapse,
+    written_counts,
+)
 from pathmc.graph import GraphInfo
-from pathmc.identify import _warn_conditioning_rank_collapse
 from pathmc.reprs import ResultReprMixin
 
 if TYPE_CHECKING:
@@ -100,12 +104,15 @@ class FalsificationResult(ResultReprMixin):
     Parameters
     ----------
     given_lmc_violations : int
-        Number of Local Markov Condition violations of the given DAG.
+        Local Markov Condition violations of the independence that was
+        written down. A rank-collapsed row is not counted.
     n_lmc_tests : int
-        Number of LMC (parental conditional independence) tests run on
-        the given DAG. Tests requiring unavailable data are not counted.
+        Parental tests that actually tested the written parent set.
+        Rank-collapsed rows and tests that could not be run are excluded.
+        Zero means the DAG cannot be evaluated on the requested
+        independences.
     given_lmc_violation_fraction : float
-        ``given_lmc_violations / n_lmc_tests`` (0 if no tests ran).
+        ``given_lmc_violations / n_lmc_tests`` (0 if no written tests ran).
     perm_lmc_violation_fractions : np.ndarray
         Fraction of LMC violations for each permuted DAG, shape
         ``(n_permutations,)``.
@@ -114,9 +121,10 @@ class FalsificationResult(ResultReprMixin):
         permuted DAG relative to the given DAG, shape
         ``(n_permutations,)``.
     p_value_lmc : float
-        Fraction of permutations whose LMC violation fraction is less
-        than or equal to the given DAG's. Small values mean the DAG
-        beats the random baseline.
+        Fraction of permutations whose written-test violation fraction is
+        at most the given DAG's. Both sides exclude rank-collapsed rows.
+        Small values mean the DAG beats the random baseline on the
+        independences that were actually tested.
     p_value_tpa : float
         Fraction of permutations lying in the Markov equivalence class
         of the given DAG (zero tPA violations). Small values mean the
@@ -134,12 +142,13 @@ class FalsificationResult(ResultReprMixin):
         One row per LMC test on the given DAG with columns ``node``,
         ``non_descendant``, ``conditioning_set``, ``requested_k``,
         ``effective_k``, ``rank_collapsed``, ``df``, ``p_value``, and
-        ``violation``. ``requested_k`` is the number of parents written
-        down. ``effective_k`` is how many were linearly independent, and
-        ``df`` is the residual degrees of freedom. ``rank_collapsed`` is
-        true when that executed test used fewer parents than requested.
-        A collapsed row did not test the parental independence that was
-        requested.
+        ``violation``. ``requested_k`` is the number of conditioning
+        columns that entered the test. ``effective_k`` is
+        ``rank([1, Z]) - 1``. ``rank_collapsed`` is true when that
+        executed test used fewer columns than requested. A collapsed row
+        stays in this frame for inspection, but it is excluded from
+        ``given_lmc_violations``, ``n_lmc_tests``, ``violations``, and
+        the permutation fraction.
     """
 
     given_lmc_violations: int
@@ -159,9 +168,9 @@ class FalsificationResult(ResultReprMixin):
     def can_evaluate(self) -> bool:
         """Whether the verdict is well-defined.
 
-        ``False`` when the DAG implies no testable parental conditional
-        independences (e.g. a fully connected graph), in which case both
-        :attr:`falsifiable` and :attr:`falsified` are ``None``.
+        ``False`` when no written parental test ran: the DAG implies none,
+        or every requested parent set rank-collapsed. Both
+        :attr:`falsifiable` and :attr:`falsified` are then ``None``.
         """
         return self.n_lmc_tests > 0 and self.n_permutations > 0
 
@@ -200,39 +209,26 @@ class FalsificationResult(ResultReprMixin):
 
     @property
     def violations(self) -> pd.DataFrame:
-        """Subset of ``local_violations`` where the LMC test was violated."""
-        if "violation" not in self.local_violations.columns:
-            return self.local_violations.copy()
-        mask = self.local_violations["violation"].astype(bool)
-        return self.local_violations[mask].copy()
-
-    def _n_rank_collapsed(self) -> int:
-        """Count executed LMC rows whose parent set was rank-deficient."""
+        """Violated rows that tested the parent set that was written down."""
         frame = self.local_violations
-        if frame.empty or "rank_collapsed" not in frame.columns:
-            return 0
-        return int(frame["rank_collapsed"].fillna(False).astype(bool).sum())
-
-    def _requested_lmc_counts(self) -> tuple[int, int]:
-        """Violations and tests of the parent set that was written down.
-
-        A rank-collapsed row is in neither count. The stored
-        ``given_lmc_violations`` / ``n_lmc_tests`` still describe every
-        executed test, including the permutation comparison.
-        """
-        frame = self.local_violations
-        if frame.empty or "violation" not in frame.columns:
-            return 0, 0
-        if "rank_collapsed" not in frame.columns:
-            return int(frame["violation"].astype(bool).sum()), len(frame)
-        collapsed = frame["rank_collapsed"].fillna(False).astype(bool)
-        scored = frame.loc[~collapsed]
-        if scored.empty:
-            return 0, 0
-        return int(scored["violation"].astype(bool).sum()), len(scored)
+        if "violation" not in frame.columns:
+            return frame.copy()
+        mask = frame["violation"].astype(bool)
+        if "rank_collapsed" in frame.columns:
+            mask &= ~frame["rank_collapsed"].fillna(False).astype(bool)
+        return frame.loc[mask].copy()
 
     def _summary_lines(self) -> list[str]:
+        n_collapsed = n_rank_collapsed(self.local_violations)
         if not self.can_evaluate:
+            if n_collapsed:
+                return [
+                    "DAG falsification: cannot be evaluated.",
+                    "Every requested parental independence rank-collapsed, "
+                    "so no written parent set was actually tested. Those "
+                    "rows are not violations. Drop the redundant parent "
+                    "and re-test.",
+                ]
             return [
                 "DAG falsification: cannot be evaluated.",
                 "The DAG implies no testable parental conditional "
@@ -242,7 +238,6 @@ class FalsificationResult(ResultReprMixin):
         informative = "" if self.falsifiable else " not"
         decision = "reject" if self.falsified else "do not reject"
         beats = (1.0 - self.p_value_lmc) * 100.0
-        n_collapsed = self._n_rank_collapsed()
         lines = [
             f"DAG falsification (significance level = {self.significance_level}):",
             f"  The DAG is{informative} informative: {self.n_in_mec} / "
@@ -250,28 +245,14 @@ class FalsificationResult(ResultReprMixin):
             f"equivalence class (p = {self.p_value_tpa:.3f}).",
         ]
         if n_collapsed:
-            scored_viol, scored_tests = self._requested_lmc_counts()
-            if scored_tests:
-                viol_clause = (
-                    f"violates {scored_viol} of {scored_tests} requested "
-                    f"parental independences"
-                )
-            else:
-                viol_clause = "violates none of the requested parental independences"
-            lines.append(
-                f"  The DAG {viol_clause}; {n_collapsed} of "
-                f"{self.n_lmc_tests} tests rank-collapsed. It beats "
-                f"{beats:.1f}% of the permuted DAGs "
-                f"(p = {self.p_value_lmc:.3f})."
-            )
-        else:
-            lines.append(
-                f"  The DAG violates {self.given_lmc_violations}/"
-                f"{self.n_lmc_tests} LMCs and beats {beats:.1f}% of the "
-                f"permuted DAGs (p = {self.p_value_lmc:.3f})."
-            )
-        if n_collapsed:
             noun = "test" if n_collapsed == 1 else "tests"
+            lines.append(
+                f"  The DAG violates {self.given_lmc_violations} of "
+                f"{self.n_lmc_tests} requested parental independences; "
+                f"{n_collapsed} {noun} rank-collapsed. The permutation "
+                f"fraction on those requested tests beats {beats:.1f}% of "
+                f"the permuted DAGs (p = {self.p_value_lmc:.3f})."
+            )
             lines.append(
                 f"  {n_collapsed} parental {noun} rank-collapsed. Those "
                 f"p-values are not the requested parental independences."
@@ -281,6 +262,11 @@ class FalsificationResult(ResultReprMixin):
                 f"rank-collapsed rows did not test the requested parent sets."
             )
         else:
+            lines.append(
+                f"  The DAG violates {self.given_lmc_violations}/"
+                f"{self.n_lmc_tests} LMCs and beats {beats:.1f}% of the "
+                f"permuted DAGs (p = {self.p_value_lmc:.3f})."
+            )
             lines.append(f"  Verdict: we {decision} the DAG.")
         return lines
 
@@ -296,7 +282,7 @@ class FalsificationResult(ResultReprMixin):
             verdict = "not_falsifiable"
         else:
             verdict = "not_rejected"
-        collapse = ", rank-collapsed" if self._n_rank_collapsed() else ""
+        collapse = ", rank-collapsed" if n_rank_collapsed(self.local_violations) else ""
         return (
             f"FalsificationResult({verdict}{collapse}, "
             f"p_lmc={self.p_value_lmc:.3f}, "
@@ -329,7 +315,7 @@ class FalsificationResult(ResultReprMixin):
                 "rejected</span> — the DAG is informative and beats the "
                 "permuted baseline."
             )
-        n_collapsed = self._n_rank_collapsed()
+        n_collapsed = n_rank_collapsed(self.local_violations)
         if n_collapsed:
             noun = "test" if n_collapsed == 1 else "tests"
             verdict += (
@@ -339,17 +325,10 @@ class FalsificationResult(ResultReprMixin):
 
         beats = (1.0 - self.p_value_lmc) * 100.0
         if n_collapsed:
-            scored_viol, scored_tests = self._requested_lmc_counts()
-            if scored_tests:
-                lmc = (
-                    f"{scored_viol} / {scored_tests} requested "
-                    f"({n_collapsed} of {self.n_lmc_tests} rank-collapsed)"
-                )
-            else:
-                lmc = (
-                    f"none requested "
-                    f"({n_collapsed} of {self.n_lmc_tests} rank-collapsed)"
-                )
+            lmc = (
+                f"{self.given_lmc_violations} / {self.n_lmc_tests} requested "
+                f"({n_collapsed} rank-collapsed)"
+            )
         else:
             lmc = f"{self.given_lmc_violations} / {self.n_lmc_tests}"
         rows = [
@@ -501,26 +480,19 @@ def _validate_lmc(
     significance_ci: float,
     include_unconditional: bool,
 ) -> tuple[int, int, list[dict]]:
-    """Count Local Markov Condition violations of *dag* against the data.
+    """Count written Local Markov Condition violations of *dag*.
 
     Returns ``(n_tests, n_violations, local)`` where ``local`` holds one
-    record per executed test. Triples whose CI test cannot be run (missing
-    data, too few observations) are skipped and not counted. Each record
-    copies ``requested_k`` and ``rank_collapsed`` from the :class:`CIResult`
-    already in hand. Permuted DAGs use the same records; only the given
-    DAG's frame is shown to the user.
+    record per executed test, including rank-collapsed rows. The returned
+    counts exclude those rows: a collapsed parent set did not test the
+    independence that was written down. Triples whose CI test cannot be
+    run are skipped and not counted.
     """
-    n_tests = 0
-    n_violations = 0
     local: list[dict] = []
     for node, non_desc, parents in _parental_triples(dag, include_unconditional):
         result = tester.ci_result(node, non_desc, parents)
         if result is None or result.skip_reason is not None or result.p is None:
             continue
-        n_tests += 1
-        violation = result.p <= significance_ci
-        if violation:
-            n_violations += 1
         local.append({
             "node": node,
             "non_descendant": non_desc,
@@ -530,8 +502,10 @@ def _validate_lmc(
             "rank_collapsed": result.rank_collapsed,
             "df": result.df,
             "p_value": result.p,
-            "violation": violation,
+            "violation": result.p <= significance_ci,
         })
+    frame = pd.DataFrame(local) if local else pd.DataFrame(columns=_LOCAL_COLUMNS)
+    n_tests, n_violations = written_counts(frame, "violation")
     return n_tests, n_violations, local
 
 
@@ -626,6 +600,7 @@ def falsify_graph(
     significance_ci: float = 0.05,
     include_unconditional: bool = True,
     random_seed: int | None = None,
+    categorical_vars: Iterable[str] | None = None,
 ) -> FalsificationResult:
     """Falsify a whole DAG against data via a node-permutation test.
 
@@ -657,9 +632,11 @@ def falsify_graph(
         cross-sectional (observed-variable) structure. Residual
         covariances (``~~``) are not supported and raise ``ValueError``.
     data : nw.DataFrame
-        Observed data. Variables without a usable numeric column (latent
-        nodes, or non-numeric columns) are skipped in CI tests but still
-        participate in the d-separation oracle and node permutations.
+        Observed data. Categorical columns (string, pandas categorical, or
+        named in *categorical_vars*) enter the CI tests as indicator
+        blocks. Variables without a data column (latent nodes) are skipped
+        in CI tests but still participate in the d-separation oracle and
+        node permutations.
     n_permutations : int | None
         Number of permuted DAGs in the baseline. Defaults to
         ``round(1 / significance_level)`` (20 at the default level). For
@@ -677,6 +654,9 @@ def falsify_graph(
         root nodes (default ``True``).
     random_seed : int | None
         Seed for the permutation sampler, for reproducible results.
+    categorical_vars : Iterable[str] | None
+        Variables to dummy-encode even though their column is numeric
+        (integer-coded labels declared with ``C()``).
 
     Returns
     -------
@@ -758,7 +738,7 @@ def falsify_graph(
 
     nodes = sorted(dag.nodes)
     rng = np.random.default_rng(random_seed)
-    tester = _PartialCorrelationTester(data, nodes)
+    tester = _PartialCorrelationTester(data, nodes, categorical_vars)
 
     given_n_tests, given_violations, local = _validate_lmc(
         dag,
@@ -767,7 +747,7 @@ def falsify_graph(
         include_unconditional,
     )
     local_df = pd.DataFrame(local) if local else pd.DataFrame(columns=_LOCAL_COLUMNS)
-    _warn_conditioning_rank_collapse(_falsify_collapse_labels(local_df))
+    warn_conditioning_rank_collapse(_falsify_collapse_labels(local_df))
     given_fraction = given_violations / given_n_tests if given_n_tests else 0.0
 
     perm_lmc_fractions: list[float] = []

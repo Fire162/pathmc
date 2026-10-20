@@ -222,7 +222,7 @@ Because `beta_y_region` is indexed by level name rather than position, posterior
 ## Fit and check against the truth
 
 ```{python}
-idata = model.fit(random_seed=42, progressbar=False)
+idata = model.fit(random_seed=42)
 az.summary(
     idata,
     var_names=["beta_y", "beta_y_region", "sigma_y"],
@@ -298,7 +298,7 @@ model_south.design("y").head(3)
 ```
 
 ```{python}
-idata_south = model_south.fit(random_seed=42, progressbar=False)
+idata_south = model_south.fit(random_seed=42)
 az.summary(
     idata_south,
     var_names=["beta_y_region"],
@@ -377,7 +377,7 @@ model_cells.design("y").head(3)
 Each coefficient is now the expected outcome for that level at $x = 0$ — a **cell mean** — rather than a difference from a reference. Since the true group means are 1, 3, and 0, that is what the fit should return (@fig-cell-means).
 
 ```{python}
-idata_cells = model_cells.fit(random_seed=42, progressbar=False)
+idata_cells = model_cells.fit(random_seed=42)
 az.summary(
     idata_cells,
     var_names=["beta_y_region"],
@@ -412,6 +412,8 @@ The two coding schemes are summarized below. Both are full rank; the choice is a
 |---|---|---|---|
 | `y ~ region` (intercept present) | one per **non-reference** level | `region[T.south]`, `region[T.west]` | difference from the reference level |
 | `y ~ 0 + region` (intercept suppressed) | one per **level** | `region[north]`, `region[south]`, `region[west]` | expected outcome for that level |
+
+Exactly one term per equation supplies the baseline. With `0 +` that is the first categorical; a second categorical in the same equation (`y ~ 0 + region + channel`) is treatment coded against it, so the design never becomes collinear.
 
 ## Priors on level effects
 
@@ -450,10 +452,15 @@ $$
 \beta_{\ell} \sim \mathcal{N}(\mu_\beta, \sigma_\beta), \qquad \mu_\beta \sim \mathcal{N}(0, 10), \qquad \sigma_\beta \sim \text{HalfNormal}(1)
 $$
 
-so that levels with little data are pulled towards the population mean by an amount the data itself decides through $\sigma_\beta$. This adds two named hyperparameters, `mu_beta_{outcome}_{variable}` and `sigma_beta_{outcome}_{variable}`:
+so that levels with little data are pulled towards the population mean by an amount the data itself decides through $\sigma_\beta$. Every level is pooled — there is no reference level to escape shrinkage — so the term carries its own population mean and takes over the intercept's role: the linear predictor below has no separate `Intercept`, and `mu_beta_{outcome}_{variable}` and `sigma_beta_{outcome}_{variable}` are the two named hyperparameters:
 
 ```{python}
-pathmc.model("y ~ x + C(region, prior='hierarchical')", data=df).priors()
+hier_model = pathmc.model("y ~ x + C(region, prior='hierarchical')", data=df)
+hier_model.equations()
+```
+
+```{python}
+hier_model.priors()
 ```
 
 To see the effect, we simulate a second dataset with twelve stores whose sample sizes range from 3 to 80, and compare the independent and hierarchical fits using cell-means coding so every store gets a directly comparable coefficient.
@@ -473,8 +480,8 @@ stores_df = pd.DataFrame({
 
 independent = pathmc.model("y ~ 0 + C(store)", data=stores_df)
 hierarchical = pathmc.model("y ~ 0 + C(store, prior='hierarchical')", data=stores_df)
-idata_ind = independent.fit(random_seed=7, progressbar=False)
-idata_hier = hierarchical.fit(random_seed=7, progressbar=False)
+idata_ind = independent.fit(random_seed=7)
+idata_hier = hierarchical.fit(random_seed=7)
 ```
 
 ```{python}
@@ -746,7 +753,7 @@ mediation.equations()
 
 ```{python}
 # | warning: false
-mediation.fit(random_seed=5, progressbar=False)
+mediation.fit(random_seed=5)
 total = mediation.do(set={"region": "south"}) - mediation.do(set={"region": "north"})
 print(
     f"Total effect of south vs north on y: {total.mean('y'):.2f}, "
@@ -795,7 +802,7 @@ The full surface in one place. Rows marked † were not exercised above; they fo
 | Choose the reference | `C(region, reference='south')` | reference must be an observed level |
 | Cell-means coding | `y ~ 0 + region` | one coefficient per level, columns `region[level]` |
 | Independent priors | default; override `beta_{lhs}_{var}` | scalar broadcasts; vectors need `dims=("{lhs}_{var}_levels",)` |
-| Hierarchical priors | `C(region, prior='hierarchical')` | adds `mu_beta_{lhs}_{var}` and `sigma_beta_{lhs}_{var}` |
+| Hierarchical priors | `C(region, prior='hierarchical')` | pools every level (no reference); adds `mu_beta_{lhs}_{var}` and `sigma_beta_{lhs}_{var}` and absorbs the intercept |
 | Introspection | `equations()`, `design()`, `priors()`, `graph()`† | posteriors indexed by level name |
 | Intervene by label | `do(set={"region": "south"})` | mixes freely with numeric `set=` values; `kind="predictive"` supported |
 | Causal contrasts | `ate(outcome, "region", values=(a, b))`, `DoResult` subtraction | any pair of observed labels |
@@ -815,14 +822,14 @@ The boundaries most likely to matter in practice are below; the complete error c
 | Categorical outcomes (`region ~ x`) | `NotImplementedError` at build | recode to a numeric or 0/1 outcome and choose a suitable family |
 | Panel models with a categorical | `NotImplementedError` at build | fit cross-sectionally, or encode indicators manually |
 | Unseen levels in `predict()` / `do()` | `ValueError` naming the level | only fitted levels can be predicted or intervened on |
-| Labels in `predictions()` / `comparisons()` / `slopes()` / `att()` / `atu()` / `effect()` | not yet routed | use `do()`, `ate()`, `prob()`, and `cate()` as shown above |
+| Labels in `predictions()` / `comparisons()` / `slopes()` / `att()` / `atu()` / `effect()` | not yet routed | use `do()`, `ate()`, `prob()`, `cate()`, `counterfactual()`, and `refute_placebo()` |
 
 ## Summary
 
 - String and categorical columns are detected automatically and **treatment coded**; wrap integer codes in `C()` to declare them as labels.
 - With an intercept, one level is the **reference** (first sorted level, first declared category, or `reference=`) and every other level gets a named coefficient in `beta_{lhs}_{var}`, indexed by level name. With `0 +`, every level gets a coefficient.
 - The reference is a **reparametrization**: pairwise contrasts are identical whichever level you choose.
-- `prior='hierarchical'` partially pools level effects and is the right default for many or sparsely observed levels.
+- `prior='hierarchical'` partially pools **every** level (no reference, so the result cannot depend on which level you would have chosen) and is the right default for many or sparsely observed levels.
 - The level set is **frozen at build time**. `do()` and `predict()` re-encode labels against it; unseen levels raise instead of silently changing the coding.
 - Interventions and contrasts are expressed in **labels** — `do(set={"region": "south"})`, `ate("y", "region", values=("north", "south"))` — and compose with numeric interventions.
 

@@ -20,7 +20,7 @@ independence enumeration and testing using the DAG stored in GraphInfo.
 
 from __future__ import annotations
 
-import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -29,7 +29,14 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 
-from pathmc._ci import CIResult, partial_correlation_ci
+from pathmc._ci import CIResult, partial_correlation_ci, stack_blocks, variable_blocks
+from pathmc._ci_report import (
+    n_rank_collapsed,
+    rank_collapse_note,
+    row_is_rank_collapsed,
+    warn_conditioning_rank_collapse,
+    written_counts,
+)
 from pathmc.graph import GraphInfo
 from pathmc.reprs import ResultReprMixin
 
@@ -183,8 +190,11 @@ def is_valid_adjustment_set(
 
     A set is valid when every member is an observed DAG node, excludes
     treatment and outcome, contains no treatment descendants or latents,
-    introduces no collider bias, and blocks all backdoor paths. The set
-    need not be minimal; supersets of a valid set are accepted.
+    and blocks all backdoor paths. A member may be a collider on some
+    treatment–outcome path when that path stays blocked elsewhere. The
+    set need not be minimal. Non-minimal sets are accepted when they
+    still block all backdoor paths. ``collider_warnings()`` lists
+    colliders in *z* as a heuristic and does not decide validity.
 
     Parameters
     ----------
@@ -246,10 +256,6 @@ def is_valid_adjustment_set(
             f"{descendants_in_z}. Descendants of the treatment cannot be "
             f"in an adjustment set — remove them from adjustment_set=."
         )
-
-    warnings_list = collider_warnings(graph_info, z, treatment, outcome)
-    if warnings_list:
-        raise ValueError(warnings_list[0])
 
     mutilated = dag.copy()
     mutilated.remove_edges_from(list(dag.in_edges(treatment)))
@@ -417,11 +423,13 @@ def collider_warnings(
     treatment: str,
     outcome: str,
 ) -> list[str]:
-    """Check if any variable in the adjustment set is a collider
-    on a path between treatment and outcome.
+    """Warn when an adjustment variable is a collider on a path
+    between treatment and outcome.
 
-    Conditioning on a collider opens a spurious path and introduces
-    bias. This function warns about such variables.
+    This is a structural heuristic. It flags the collider even when
+    the rest of the set, or another unconditioned collider, keeps that
+    path blocked. ``is_valid_adjustment_set()`` decides whether the
+    set satisfies the backdoor criterion.
 
     .. note::
 
@@ -524,13 +532,16 @@ class ImplicationTestResult(ResultReprMixin):
         ``conditioning_set``, ``requested_k``, ``effective_k``,
         ``rank_collapsed``, ``df``, ``partial_corr``, ``p_value``,
         ``n_obs``, ``significant``. ``requested_k`` is the number of
-        conditioners written down. ``effective_k`` is how many were
-        linearly independent, and ``df`` is the residual degrees of
-        freedom (``n_obs - effective_k - 2``). ``effective_k`` and
-        ``df`` are missing when the test was skipped.
-        ``rank_collapsed`` is true when an executed test used fewer
-        conditioners than requested, and false on a skip. A collapsed
-        row did not test the independence that was requested.
+        conditioning columns that entered the test. That equals the number
+        of named conditioners when each is a single column; a categorical
+        conditioner contributes its indicator columns. ``effective_k`` is
+        ``rank([1, Z]) - 1``. For a single-column test ``df`` is
+        ``n_obs - effective_k - 2``; a block test reports Rao's denominator
+        degrees of freedom. ``effective_k`` and ``df`` are missing when the
+        test was skipped. ``rank_collapsed`` is true when an executed test
+        used fewer conditioning columns than requested, and false on a skip.
+        A collapsed row did not test the independence that was requested,
+        so ``n_violations`` and ``violations`` exclude it.
     alpha : float
         Significance level used for the ``significant`` column.
     """
@@ -540,60 +551,43 @@ class ImplicationTestResult(ResultReprMixin):
 
     @property
     def n_tests(self) -> int:
-        """Total number of implied independences tested."""
+        """Total rows, including skips and rank-collapsed tests."""
         return len(self.results)
 
     @property
     def n_violations(self) -> int:
-        """Number of independence violations (significant partial correlations)."""
-        return int(self.results["significant"].sum())
+        """Significant rows that tested the independence that was written down.
+
+        A rank-collapsed row is not a violation of that independence.
+        """
+        return written_counts(self.results, "significant")[1]
 
     @property
     def violations(self) -> pd.DataFrame:
-        """Subset of results where the independence is violated."""
-        return self.results[self.results["significant"]].copy()
+        """Significant rows that are not rank-collapsed."""
+        frame = self.results
+        mask = frame["significant"].astype(bool)
+        if "rank_collapsed" in frame.columns:
+            mask &= ~frame["rank_collapsed"].fillna(False).astype(bool)
+        return frame.loc[mask].copy()
 
     def to_dataframe(self) -> pd.DataFrame:
         """Return the full results as a DataFrame."""
         return self.results.copy()
 
-    def _n_rank_collapsed(self) -> int:
-        """Count executed rows whose conditioning set was rank-deficient."""
-        frame = self.results
-        if frame.empty or "rank_collapsed" not in frame.columns:
-            return 0
-        return int(frame["rank_collapsed"].fillna(False).astype(bool).sum())
-
-    def _written_implication_counts(self) -> tuple[int, int]:
-        """Tests and violations of the independence that was written down.
-
-        A rank-collapsed row did not test that independence, so it is in
-        neither count. Frames without the column keep the old totals.
-        """
-        frame = self.results
-        if frame.empty or "significant" not in frame.columns:
-            return 0, 0
-        if "rank_collapsed" not in frame.columns:
-            return len(frame), int(frame["significant"].sum())
-        collapsed = frame["rank_collapsed"].fillna(False).astype(bool)
-        scored = frame.loc[~collapsed]
-        if scored.empty:
-            return 0, 0
-        return len(scored), int(scored["significant"].sum())
-
     def _repr_compact(self) -> str:
-        collapsed = self._n_rank_collapsed()
+        written_tests, written_violations = written_counts(self.results, "significant")
+        collapsed = n_rank_collapsed(self.results)
         collapse = f", {collapsed} rank-collapsed" if collapsed else ""
-        _, written_violations = self._written_implication_counts()
         return (
-            f"ImplicationTestResult({self.n_tests} tests, "
+            f"ImplicationTestResult({written_tests} tests, "
             f"{written_violations} violations{collapse}, α={self.alpha})"
         )
 
     def _repr_html_(self) -> str:
         """Rich HTML display for Jupyter notebooks."""
-        n_collapsed = self._n_rank_collapsed()
-        written_tests, written_violations = self._written_implication_counts()
+        n_collapsed = n_rank_collapsed(self.results)
+        written_tests, written_violations = written_counts(self.results, "significant")
         if n_collapsed:
             noun = "set" if n_collapsed == 1 else "sets"
             collapse = (
@@ -626,7 +620,7 @@ class ImplicationTestResult(ResultReprMixin):
             cond = row["conditioning_set"]
             cond_str = f" | {{{cond}}}" if cond else ""
             statement = f"{row['x']} ⊥⊥ {row['y']}{cond_str}"
-            collapsed = _row_rank_collapsed(row)
+            collapsed = row_is_rank_collapsed(row)
 
             if collapsed or pd.isna(row["p_value"]):
                 style = ""
@@ -644,7 +638,7 @@ class ImplicationTestResult(ResultReprMixin):
                 else "—"
             )
             p_str = f"{row['p_value']:.4f}" if not pd.isna(row["p_value"]) else "—"
-            statement += _rank_collapse_note(row)
+            statement += rank_collapse_note(row)
 
             rows.append(
                 f"<tr{style}>"
@@ -668,70 +662,6 @@ class ImplicationTestResult(ResultReprMixin):
         )
 
         return header + table
-
-
-def _caller_stacklevel() -> int:
-    """Stack level that attributes a warning to the first non-pathmc frame."""
-    import sys
-
-    frame = sys._getframe(1)
-    level = 1
-    while frame.f_back is not None:
-        frame = frame.f_back
-        level += 1
-        module = frame.f_globals.get("__name__", "")
-        if module != "pathmc" and not module.startswith("pathmc."):
-            return level
-    return level
-
-
-def _warn_conditioning_rank_collapse(statements: list[str]) -> None:
-    """Warn once that executed CI tests conditioned on a smaller set.
-
-    The engine stays silent. Callers pass labels built from rows whose
-    ``rank_collapsed`` flag is set.
-
-    Parameters
-    ----------
-    statements : list[str]
-        One short label per collapsed row, including ``requested_k`` and
-        ``effective_k``. No warning is emitted when empty.
-    """
-    if not statements:
-        return
-    n_collapsed = len(statements)
-    noun = "test" if n_collapsed == 1 else "tests"
-    subject = "This test" if n_collapsed == 1 else "These tests"
-    warnings.warn(
-        f"Conditioning-set rank collapse in {n_collapsed} "
-        f"conditional-independence {noun}: {'; '.join(statements)}. "
-        f"{subject} used fewer linearly independent conditioners than "
-        f"requested, so the p-value is not evidence about the full "
-        f"independence. Drop the constant, duplicated, or collinear "
-        f"conditioner — compare effective_k with requested_k — "
-        f"before reading the result.",
-        UserWarning,
-        stacklevel=_caller_stacklevel(),
-    )
-
-
-def _row_rank_collapsed(row: pd.Series) -> bool:
-    """Whether this displayed row did not test the written conditioning set."""
-    if "rank_collapsed" not in row.index or pd.isna(row["rank_collapsed"]):
-        return False
-    return bool(row["rank_collapsed"])
-
-
-def _rank_collapse_note(row: pd.Series) -> str:
-    """Mark a displayed independence whose conditioning set collapsed.
-
-    Frames without ``rank_collapsed``, and rows whose test was skipped,
-    get no marker. The marker is the only HTML-table change for a
-    full-rank result, which renders as it did before.
-    """
-    if not _row_rank_collapsed(row):
-        return ""
-    return f" [effective_k={int(row['effective_k'])}]"
 
 
 def _implication_collapse_labels(frame: pd.DataFrame) -> list[str]:
@@ -810,6 +740,8 @@ def test_implications(
     independences: list[ConditionalIndependence],
     data: nw.DataFrame,
     alpha: float = 0.05,
+    *,
+    categorical_vars: Iterable[str] | None = None,
 ) -> ImplicationTestResult:
     """Test implied conditional independences against observed data.
 
@@ -817,6 +749,13 @@ def test_implications(
     an independence X ⊥⊥ Y | Z, regresses both X and Y on Z, then
     tests whether the correlation between residuals is significantly
     different from zero.
+
+    A categorical variable enters as its indicator columns: as a
+    conditioner this adjusts for group membership, and as X or Y the test
+    becomes the linear multivariate generalisation (Wilks' lambda with
+    Rao's F approximation, the partial F-test when the other side is a
+    single column). The reported ``partial_corr`` is then the largest
+    canonical correlation, which is non-negative.
 
     A significant result (p < alpha) indicates a *violation*: the data
     show an association that the DAG says should not exist, suggesting
@@ -831,6 +770,10 @@ def test_implications(
         in the independence statements.
     alpha : float
         Significance level for flagging violations (default 0.05).
+    categorical_vars : Iterable[str] | None
+        Variables to dummy-encode even though their column is numeric
+        (integer-coded labels declared with ``C()``). String and pandas
+        categorical columns are always encoded.
 
     Returns
     -------
@@ -865,14 +808,20 @@ def test_implications(
             )
 
         z_vars = sorted(ci.conditioning_set)
-        result = _partial_correlation_result(data, ci.x, ci.y, z_vars)
+        result = _partial_correlation_result(
+            data,
+            ci.x,
+            ci.y,
+            z_vars,
+            categorical_vars=categorical_vars,
+        )
         if result.skip_reason is not None:
-            r: float = np.nan
-            p: float = np.nan
-            df_value: float | int = np.nan
-            effective_k: float | int = np.nan
+            r = np.nan
+            p = np.nan
+            df_value = np.nan
+            effective_k = np.nan
         else:
-            assert result.r is not None and result.p is not None  # narrowing
+            assert result.r is not None and result.p is not None
             assert result.df is not None and result.effective_k is not None
             r = result.r
             p = result.p
@@ -911,7 +860,7 @@ def test_implications(
                 "significant",
             ]
         )
-    _warn_conditioning_rank_collapse(_implication_collapse_labels(df))
+    warn_conditioning_rank_collapse(_implication_collapse_labels(df))
 
     return ImplicationTestResult(results=df, alpha=alpha)
 
@@ -921,15 +870,18 @@ def _partial_correlation_result(
     x: str,
     y: str,
     z_vars: list[str],
+    *,
+    categorical_vars: Iterable[str] | None = None,
 ) -> CIResult:
     """Run the shared CI engine on named columns of *data*.
 
-    Nulls become NaN on conversion to NumPy, so the engine's ``isnan``
-    mask handles both pandas NaN and polars null/NaN.
+    Nulls become NaN on conversion, so the engine's ``isnan`` mask
+    handles both pandas NaN and polars null/NaN. Categorical columns
+    (string, pandas categorical, or named in *categorical_vars*) enter
+    as indicator blocks.
     """
-    cols = [x, y, *z_vars]
-    arr = data.select(cols).to_numpy().astype(float)
-    return partial_correlation_ci(arr[:, 0], arr[:, 1], arr[:, 2:])
+    blocks = variable_blocks(data, [x, y, *z_vars], categorical_vars)
+    return partial_correlation_ci(blocks[x], blocks[y], stack_blocks(blocks, z_vars))
 
 
 def _blocks_all_backdoor_paths(

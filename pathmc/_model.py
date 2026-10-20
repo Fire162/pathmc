@@ -175,12 +175,19 @@ def _scale_set_for_bounds(
 
     Bounds and extrapolation checks run against already-scaled ``_data``,
     so the values they see must be in the same units the model compiled.
+    Non-numeric values, including categorical labels, have no scale factor
+    and are left out so a mixed intervention map can be passed through.
     """
     if factors is None:
         return interventions
     out: dict[str, float | np.ndarray] = {}
     for var, val in interventions.items():
-        vals = np.asarray(val, dtype=float)
+        if isinstance(val, (str, bytes)):
+            continue
+        array = np.asarray(val)
+        if array.dtype.kind not in "biuf":
+            continue
+        vals = array.astype(float, copy=False)
         if vals.ndim == 0:
             vals = np.full(len(data), float(vals))
         elif vals.size != len(data):
@@ -339,9 +346,17 @@ def _exclude_categorical_scaling(
 def _warn_extrapolation(
     data: nw.DataFrame, interventions: Mapping[str, float | np.ndarray]
 ) -> None:
-    """Warn when an intervention is outside its observed data range."""
+    """Warn when a numeric intervention is outside its observed data range.
+
+    String, categorical, and object columns have no numeric range. Skipping
+    them here means callers can pass a mixed intervention map without a
+    private pre-filter, and a numeric-looking label is not cast to float.
+    """
     for var, val in interventions.items():
         if var not in data.columns:
+            continue
+        column = np.asarray(data[var].to_numpy())
+        if column.dtype.kind not in "biuf":
             continue
         col_min = data[var].min()
         col_max = data[var].max()
@@ -433,6 +448,9 @@ class PathModel:
         from pathmc.categorical import categorical_terms
 
         self._categorical_terms = categorical_terms(spec)
+        self._categorical_vars: set[str] = {
+            call.variable for _, call in self._categorical_terms
+        }
         # Original model() arguments, recorded so refutation can faithfully
         # re-fit on perturbed data. Set by model(); None for direct
         # construction (in which case refute_placebo raises).
@@ -1072,7 +1090,7 @@ class PathModel:
 
         from pathmc.categorical import encode_categorical
 
-        categorical_vars = {call.variable for _, call in self._categorical_terms}
+        categorical_vars = self._categorical_vars
         updates: dict[str, np.ndarray] = {}
         for var in self._graph_info.exogenous - categorical_vars:
             if var not in self._pymc_model.named_vars:
@@ -1308,14 +1326,28 @@ class PathModel:
         families : dict[str, str] | None
             Per-variable families for the reduced model only.
         priors : dict | None
-            Prior overrides for the reduced model, merged with inherited
-            outcome dispersion priors.
+            Prior overrides for the reduced equation. A shared key is
+            inherited when its shape does not follow the predictor set or
+            treatment coding: outcome dispersion priors, transform-parameter
+            priors used by the reduced formula, and scalar hierarchical
+            categorical hyperpriors (``mu_beta_*``, ``sigma_beta_*``).
+            Otherwise a custom parent value must be passed here or
+            construction raises. That includes coefficient priors and
+            non-scalar hyperpriors. Unknown shared keys fail closed the
+            same way. An explicit value here still wins.
 
         Returns
         -------
         AdjustmentModel
             Facade with ``fit()`` and ``ate()`` / ``att()`` / ``atu()`` /
             ``cate()`` delegating to the inner outcome model.
+
+        Raises
+        ------
+        ValueError
+            If this model has a custom prior on a shared key whose shape
+            follows the predictor set or treatment coding, or on an unknown
+            shared key, and ``priors`` does not override that key.
 
         See Also
         --------
@@ -1380,8 +1412,13 @@ class PathModel:
         treatment: str,
         outcome: str,
     ) -> list[str]:
-        """Check if any variable in the proposed adjustment set is a
-        collider that could introduce bias.
+        """Warn when a proposed adjustment variable is a collider on a
+        path between treatment and outcome.
+
+        This is a structural heuristic. It flags the collider even when
+        the rest of the set keeps that path blocked.
+        ``is_valid_adjustment_set()`` decides whether the set satisfies
+        the backdoor criterion.
 
         .. note::
 
@@ -1450,9 +1487,10 @@ class PathModel:
         When a conditioner is constant, duplicated, or collinear with the
         others, ``rank_collapsed`` is set and a warning is emitted: the
         p-value then refers to that smaller set, not the independence
-        implied by the DAG. The display does not mark that row pass or
-        fail, and it does not count the row as a violated implication.
-        Drop the redundant variable and re-test.
+        implied by the DAG. ``n_violations``, ``violations``, the compact
+        representation, and the HTML banner exclude that row. The display
+        does not mark it pass or fail. Drop the redundant variable and
+        re-test.
 
         Uses the observed data, not the posterior.
 
@@ -1470,7 +1508,12 @@ class PathModel:
         self._require_data("test_implications")
         assert self._data is not None
         indeps = self.implied_independences()
-        return _test_implications(indeps, self._data, alpha=alpha)
+        return _test_implications(
+            indeps,
+            self._data,
+            alpha=alpha,
+            categorical_vars=self._categorical_vars,
+        )
 
     def _run_do(
         self,
@@ -1498,7 +1541,7 @@ class PathModel:
             families=self._families,
             subgroup_indices=subgroup_indices,
             scaling_factors=self._scaling_factors,
-            categorical_vars={call.variable for _, call in self._categorical_terms},
+            categorical_vars=self._categorical_vars,
         )
 
     @contextmanager
@@ -1511,8 +1554,7 @@ class PathModel:
         assert self._data is not None
         from pathmc.categorical import encode_categorical
 
-        known = {call.variable for _, call in self._categorical_terms}
-        unknown = set(values) - known
+        unknown = set(values) - self._categorical_vars
         if unknown:
             raise KeyError(f"Unknown categorical intervention(s): {sorted(unknown)!r}.")
 
@@ -1629,8 +1671,11 @@ class PathModel:
         ``local_violations`` includes ``requested_k``, ``effective_k``,
         ``rank_collapsed``, and ``df`` for each test on this DAG. A
         rank-deficient parent set (a constant, duplicate, or collinear
-        parent) sets ``rank_collapsed``, warns, and the summary's LMC
-        count excludes that row and says how many tests collapsed.
+        parent) sets ``rank_collapsed`` and warns. That row stays in the
+        frame, but ``given_lmc_violations``, ``n_lmc_tests``,
+        ``violations``, and the permutation fraction all exclude it.
+        The summary names the collapsed count separately. If every
+        requested test collapses, the DAG cannot be evaluated.
 
         Uses the observed data, not the posterior, and works before
         sampling. Models with residual covariances (``~~``) are not
@@ -1673,6 +1718,7 @@ class PathModel:
             significance_ci=significance_ci,
             include_unconditional=include_unconditional,
             random_seed=random_seed,
+            categorical_vars=self._categorical_vars,
         )
 
     def _refit_permuted(
@@ -1692,10 +1738,13 @@ class PathModel:
         assert self._construction is not None
 
         rng = np.random.default_rng(seed)
-        treat_vals = np.asarray(self._data[treatment].to_numpy(), dtype=float)
-        permuted = rng.permutation(treat_vals)
+        # Gather rows rather than rebuilding the column from a numpy array so
+        # the dtype survives: a pandas Categorical keeps its declared level
+        # order, which fixes the default reference on the refit.
+        row_order = rng.permutation(len(self._data))
+        permuted_column = self._data[row_order][treatment]
         permuted_data = self._data.with_columns(
-            nw.new_series(treatment, permuted, backend=self._data.implementation)
+            permuted_column.alias(treatment)
         ).to_native()
 
         c = self._construction
@@ -1877,7 +1926,7 @@ class PathModel:
                 "ate(), cate(), prob(), or sensitivity()."
             )
 
-        categorical_vars = {call.variable for _, call in self._categorical_terms}
+        categorical_vars = self._categorical_vars
         categorical_set = {
             var: value for var, value in (set or {}).items() if var in categorical_vars
         }
@@ -1948,8 +1997,8 @@ class PathModel:
 
     def counterfactual(
         self,
-        evidence: dict[str, float],
-        do: dict[str, float],
+        evidence: dict[str, Any],
+        do: dict[str, Any],
         allow_partial_evidence: bool = False,
     ) -> DoResult:
         """Compute unit-level counterfactual outcomes.
@@ -1962,16 +2011,20 @@ class PathModel:
 
         Parameters
         ----------
-        evidence : dict[str, float]
+        evidence : dict[str, Any]
             Observed values for a specific individual. Used in the
-            abduction step to recover their exogenous (U) terms.
-        do : dict[str, float]
-            Intervention values (same format as ``do(set=...)``).
+            abduction step to recover their exogenous (U) terms. A
+            categorical predictor is given as one of its fitted level
+            labels and must always be supplied, since a label has no
+            population mean to fall back on.
+        do : dict[str, Any]
+            Intervention values (same format as ``do(set=...)``); a
+            categorical predictor takes a level label.
         allow_partial_evidence : bool
-            If ``True``, missing evidence is assigned its population mean
-            (U = 0) with a warning. By default, all model variables must be
-            supplied so a counterfactual cannot silently mix individual and
-            population information.
+            If ``True``, missing numeric evidence is assigned its population
+            mean (U = 0) with a warning. By default, all model variables
+            must be supplied so a counterfactual cannot silently mix
+            individual and population information.
 
         Returns
         -------
@@ -2003,16 +2056,26 @@ class PathModel:
                 "every structural variable."
             )
         assert self._data is not None
+        # Labels have no numeric range and no scale factor. The helpers
+        # below skip them, so this method does not grow a private pre-filter.
         scaled_do = _scale_set_for_bounds(do, self._scaling_factors, self._data)
         _reject_hsgp_out_of_bounds(self._spec, self._data, scaled_do)
         _warn_extrapolation(self._data, scaled_do)
         if self._scaling_factors is not None:
             do = {
-                var: _scale_scalar_intervention(var, val, self._scaling_factors)
+                var: (
+                    val
+                    if var in self._categorical_vars
+                    else _scale_scalar_intervention(var, val, self._scaling_factors)
+                )
                 for var, val in do.items()
             }
             evidence = {
-                var: _scale_scalar_intervention(var, val, self._scaling_factors)
+                var: (
+                    val
+                    if var in self._categorical_vars
+                    else _scale_scalar_intervention(var, val, self._scaling_factors)
+                )
                 for var, val in evidence.items()
             }
         result = run_counterfactual(

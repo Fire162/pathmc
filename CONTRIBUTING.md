@@ -13,7 +13,7 @@ make setup
 make test-fast
 ```
 
-Common contributor commands are collected in the root `Makefile`; run `make help` to list the available setup, lint, test, docs, and build targets. The targets are thin aliases over the underlying `uv` commands (for example `make setup` runs `uv sync --all-extras` plus the hook install, and `make test-fast` runs `uv run pytest -x -v -m "not slow"`), so you can read the `Makefile` to see the exact command behind each alias.
+Common contributor commands are collected in the root `Makefile`; run `make help` to list the available setup, lint, test, docs, and build targets. The targets are thin aliases over the underlying `uv` commands (for example `make setup` runs `uv sync --all-extras` plus the hook install, and `make test-fast` runs `uv run pytest -x -v -m "not slow and not nightly"`), so you can read the `Makefile` to see the exact command behind each alias.
 
 `make setup` runs `uv sync --all-extras`, which reads `pyproject.toml` and `uv.lock`, then creates a project virtual environment at `.venv/` containing the correct Python (per `.python-version`), pathmc installed in editable mode, the default `dev` dependency group, and every dependency from the `docs` and `samplers` extras. It then installs the pre-commit hooks with `uv run prek install -f`. You do not need to `source .venv/bin/activate` or otherwise activate the environment by hand: the `Makefile` targets prefix commands with `uv run`, which runs them inside `.venv/` (syncing first if anything is stale). If you need a command without a target, prefix it with `uv run` yourself (for example `uv run pytest` or `uv run python -c "import pathmc"`).
 
@@ -68,9 +68,11 @@ git-ai stats <start>..<end>
 
 A `.github/workflows/git-ai.yml` job keeps attribution intact across the rewrites GitHub performs server-side. It runs on every push to an open pull request and again when one is closed, but it only does work in the cases that would otherwise lose data — principally squash and rebase merges, which collapse or replace the commits the notes were attached to. Ordinary merge commits already preserve attribution and are skipped.
 
-Two limits on completeness are worth knowing before you read anything into the numbers. Attribution tracks adoption: while only some contributors have git-ai installed, the notes undercount AI authorship and overcount human authorship. And **history before this workflow landed was never consolidated** — every note predating it is still attached to an orphaned pre-squash commit, so `git log --show-notes=ai` and `git-ai stats` will show nothing for that period. That is expected, not a broken install. See the [git-ai docs](https://usegitai.com/docs/get-started) for anything beyond the above.
+A weekly `.github/workflows/git-ai-sweep.yml` job is the backstop. It replays the same consolidation over pull requests merged in the last two weeks and fills in any that are still missing a note: runs that failed or were dropped from the queue, and pull requests from forks (see below). Maintainers can also run it by hand from the Actions tab, with `since` set to a date or to `all` to backfill the full history.
 
-One limitation to be aware of if you contribute from a fork: GitHub gives `pull_request` events from forks a read-only token, so the job can fetch your fork's notes but cannot push the consolidated result back. Attribution for fork pull requests therefore may not be recorded at all. Nothing about this blocks or slows the pull request; it only means the resulting numbers under-represent outside contributions.
+Attribution tracks adoption, so read the numbers with that in mind: while only some contributors have git-ai installed, the notes undercount AI authorship and overcount human authorship. See the [git-ai docs](https://usegitai.com/docs/get-started) for anything beyond the above.
+
+If you contribute from a fork: GitHub gives `pull_request` events from forks a read-only token, so the merge-time job can fetch your fork's notes but cannot push the consolidated result back. The weekly sweep runs with the repository's own token and records it instead, so attribution for a fork pull request can take up to a week to appear. Only notes you have pushed to your fork can be picked up. Nothing about this blocks or slows the pull request.
 
 ## Contributing code via pull requests
 
@@ -112,13 +114,13 @@ Run fast tests only, excluding slow MCMC sampling tests:
 make test-fast
 ```
 
-Run the full test suite, including slow integration tests, and report coverage:
+Run the per-commit suite, including slow integration tests and excluding nightly Tier 5, and report coverage:
 
 ```bash
 make test
 ```
 
-`make test` measures line and branch coverage of `pathmc` and fails if total coverage drops below the `fail_under` threshold in `pyproject.toml` (`[tool.coverage.report]`). The same command and gate run in CI on every pull request. Coverage is intentionally not collected by `make test-fast` or by single-file gate runs, so those stay fast and never trip the threshold on a partial run.
+`make test` measures line and branch coverage of `pathmc` and fails if total coverage drops below the `fail_under` threshold in `pyproject.toml` (`[tool.coverage.report]`). The same command and gate run in CI on every pull request. Nightly Tier 5 stays on `make test-nightly`. Coverage is intentionally not collected by `make test-fast` or by single-file gate runs, so those stay fast and never trip the threshold on a partial run.
 
 Run a targeted milestone or module test while iterating:
 
@@ -143,7 +145,7 @@ make lint
 - Link the issue being addressed, preferably with `Closes #<issue-number>` in the pull request description.
 - Add or update tests for user-facing behavior changes.
 - Update documentation, examples, or README content when behavior or setup instructions change.
-- Run the relevant targeted tests, `make test-fast` or `make test`, and `make check_lint` before requesting review. Pull requests also run `make test` in GitHub Actions (the full suite, including slow MCMC tests).
+- Run the relevant targeted tests, `make test-fast` or `make test`, and `make check_lint` before requesting review. Pull requests also run `make test` in GitHub Actions (the per-commit suite, including slow MCMC tests, excluding nightly Tier 5).
 - Label the pull request before merge so GitHub's generated release notes place it in the correct category; use labels such as `bug`, `documentation`, or `enhancement` when they apply.
 - Mark work-in-progress pull requests as drafts until the implementation and test plan are ready for review.
 
