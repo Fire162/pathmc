@@ -98,6 +98,14 @@ def test_constant_or_missing_input_keeps_unit_lengthscale():
     assert default_priors(spec, data=nans)["ell_Y_x"].parameters["beta"] == 1
 
 
+def test_nonfinite_input_does_not_scale_to_the_finite_subset():
+    spec = parse_spec("Y ~ hsgp(x, m=12, c=1.5)")
+    mixed_inf = pd.DataFrame({"x": [0.0, 10.0, np.inf], "Y": np.zeros(3)})
+    mixed_nan = pd.DataFrame({"x": [0.0, 10.0, np.nan], "Y": np.zeros(3)})
+    assert default_priors(spec, data=mixed_inf)["ell_Y_x"].parameters["beta"] == 1
+    assert default_priors(spec, data=mixed_nan)["ell_Y_x"].parameters["beta"] == 1
+
+
 def test_model_priors_show_the_scaled_lengthscale():
     df = pd.DataFrame({"x": np.linspace(0.0, 10.0, 11), "Y": np.zeros(11)})
     model = pathmc.model("Y ~ hsgp(x, m=8, c=1.5)", data=df)

@@ -70,15 +70,19 @@ def lengthscale_prior(span: float | None = None) -> Prior:
 
 
 def input_span(data: Any, column: str) -> float | None:
-    """Return ``max(column) - min(column)`` over finite values, or None."""
+    """Return ``max(column) - min(column)``, or None when that span is unusable.
+
+    A missing column, an empty column, a constant column, or any non-finite
+    value (NaN or infinity) has no single finite range to match. Dropping
+    the bad rows and scaling to the rest would hide that.
+    """
     if column not in getattr(data, "columns", ()):
         return None
-    values = np.asarray(data[column].to_numpy(), dtype=float)
-    finite = values[np.isfinite(values)]
-    if finite.size == 0:
+    values = np.asarray(data[column].to_numpy(), dtype=float).reshape(-1)
+    if values.size < 2 or not np.isfinite(values).all():
         return None
-    span = float(finite.max() - finite.min())
-    if not np.isfinite(span) or span <= 0:
+    span = float(values.max() - values.min())
+    if span <= 0:
         return None
     return span
 
