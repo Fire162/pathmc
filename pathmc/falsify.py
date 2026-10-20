@@ -114,17 +114,22 @@ class FalsificationResult(ResultReprMixin):
     given_lmc_violation_fraction : float
         ``given_lmc_violations / n_lmc_tests`` (0 if no written tests ran).
     perm_lmc_violation_fractions : np.ndarray
-        Fraction of LMC violations for each permuted DAG, shape
-        ``(n_permutations,)``.
+        Written-test LMC violation fraction for each permuted DAG that
+        produced a written parental test. A permutation whose tests all
+        rank-collapsed is omitted, not stored as 0. The length can be
+        shorter than ``n_permutations``.
     perm_tpa_violation_fractions : np.ndarray
         Fraction of parental d-separation (tPA) violations for each
         permuted DAG relative to the given DAG, shape
         ``(n_permutations,)``.
     p_value_lmc : float
-        Fraction of permutations whose written-test violation fraction is
-        at most the given DAG's. Both sides exclude rank-collapsed rows.
-        Small values mean the DAG beats the random baseline on the
-        independences that were actually tested.
+        Fraction of the scored permutations whose written-test violation
+        fraction is at most the given DAG's. Both sides exclude
+        rank-collapsed rows, and a permutation with no written parental
+        test is not in this fraction. Small values mean the DAG beats
+        the random baseline on the independences that were actually
+        tested. NaN when permutations ran but none produced a written
+        parental test.
     p_value_tpa : float
         Fraction of permutations lying in the Markov equivalence class
         of the given DAG (zero tPA violations). Small values mean the
@@ -148,7 +153,9 @@ class FalsificationResult(ResultReprMixin):
         executed test used fewer columns than requested. A collapsed row
         stays in this frame for inspection, but it is excluded from
         ``given_lmc_violations``, ``n_lmc_tests``, ``violations``, and
-        the permutation fraction.
+        the permutation fraction. A permuted DAG that produced no
+        written parental test is omitted from that fraction, not scored
+        as zero violations.
     """
 
     given_lmc_violations: int
@@ -245,7 +252,28 @@ class FalsificationResult(ResultReprMixin):
             ]
         informative = "" if self.falsifiable else " not"
         decision = "reject" if self.falsified else "do not reject"
-        beats = (1.0 - self.p_value_lmc) * 100.0
+        n_scored = len(self.perm_lmc_violation_fractions)
+        omitted = self.n_permutations - n_scored
+        if n_scored == 0:
+            comparison = (
+                "No permuted DAG produced a written parental test, so the "
+                "permutation fraction was not computed and the DAG is not "
+                "rejected on that comparison."
+            )
+        elif omitted:
+            beats = (1.0 - self.p_value_lmc) * 100.0
+            comparison = (
+                f"The permutation fraction on those requested tests beats "
+                f"{beats:.1f}% of the {n_scored} permuted DAGs that produced "
+                f"a written-test fraction (p = {self.p_value_lmc:.3f}). "
+                f"{omitted} permuted DAGs produced no written parental test "
+                f"and are not in that fraction."
+            )
+        else:
+            beats = (1.0 - self.p_value_lmc) * 100.0
+            comparison = (
+                f"beats {beats:.1f}% of the permuted DAGs (p = {self.p_value_lmc:.3f})."
+            )
         lines = [
             f"DAG falsification (significance level = {self.significance_level}):",
             f"  The DAG is{informative} informative: {self.n_in_mec} / "
@@ -254,13 +282,19 @@ class FalsificationResult(ResultReprMixin):
         ]
         if n_collapsed:
             noun = "test" if n_collapsed == 1 else "tests"
-            lines.append(
-                f"  The DAG violates {self.given_lmc_violations} of "
-                f"{self.n_lmc_tests} requested parental independences; "
-                f"{n_collapsed} {noun} rank-collapsed. The permutation "
-                f"fraction on those requested tests beats {beats:.1f}% of "
-                f"the permuted DAGs (p = {self.p_value_lmc:.3f})."
-            )
+            if n_scored == 0 or omitted:
+                lines.append(
+                    f"  The DAG violates {self.given_lmc_violations} of "
+                    f"{self.n_lmc_tests} requested parental independences; "
+                    f"{n_collapsed} {noun} rank-collapsed. {comparison}"
+                )
+            else:
+                lines.append(
+                    f"  The DAG violates {self.given_lmc_violations} of "
+                    f"{self.n_lmc_tests} requested parental independences; "
+                    f"{n_collapsed} {noun} rank-collapsed. The permutation "
+                    f"fraction on those requested tests {comparison}"
+                )
             lines.append(
                 f"  {n_collapsed} parental {noun} rank-collapsed. Those "
                 f"p-values are not the requested parental independences."
@@ -270,11 +304,16 @@ class FalsificationResult(ResultReprMixin):
                 f"rank-collapsed rows did not test the requested parent sets."
             )
         else:
-            lines.append(
-                f"  The DAG violates {self.given_lmc_violations}/"
-                f"{self.n_lmc_tests} LMCs and beats {beats:.1f}% of the "
-                f"permuted DAGs (p = {self.p_value_lmc:.3f})."
-            )
+            if n_scored == 0 or omitted:
+                lines.append(
+                    f"  The DAG violates {self.given_lmc_violations}/"
+                    f"{self.n_lmc_tests} LMCs. {comparison}"
+                )
+            else:
+                lines.append(
+                    f"  The DAG violates {self.given_lmc_violations}/"
+                    f"{self.n_lmc_tests} LMCs and {comparison}"
+                )
             lines.append(f"  Verdict: we {decision} the DAG.")
         return lines
 
@@ -292,9 +331,14 @@ class FalsificationResult(ResultReprMixin):
         else:
             verdict = "not_rejected"
         collapse = ", rank-collapsed" if n_rank_collapsed(self.local_violations) else ""
+        p_lmc = (
+            "n/a"
+            if len(self.perm_lmc_violation_fractions) == 0
+            else f"{self.p_value_lmc:.3f}"
+        )
         return (
             f"FalsificationResult({verdict}{collapse}, "
-            f"p_lmc={self.p_value_lmc:.3f}, "
+            f"p_lmc={p_lmc}, "
             f"{self.n_permutations} permutations)"
         )
 
@@ -327,6 +371,12 @@ class FalsificationResult(ResultReprMixin):
                 "informative</span> — too many permutations share its Markov "
                 "equivalence class to falsify it."
             )
+        elif len(self.perm_lmc_violation_fractions) == 0:
+            verdict = (
+                '<span style="color: orange; font-weight: bold;">⚠ Not '
+                "compared</span> — no permuted DAG produced a written "
+                "parental test, so the LMC comparison was not run."
+            )
         else:
             verdict = (
                 '<span style="color: green; font-weight: bold;">✓ Not '
@@ -341,7 +391,19 @@ class FalsificationResult(ResultReprMixin):
                 f"requested parent sets."
             )
 
-        beats = (1.0 - self.p_value_lmc) * 100.0
+        n_scored = len(self.perm_lmc_violation_fractions)
+        omitted = self.n_permutations - n_scored
+        if n_scored == 0:
+            beats_cell = "not computed"
+        elif omitted:
+            beats = (1.0 - self.p_value_lmc) * 100.0
+            beats_cell = (
+                f"{beats:.1f}% of {n_scored} scored "
+                f"(p = {self.p_value_lmc:.3f}; {omitted} omitted)"
+            )
+        else:
+            beats = (1.0 - self.p_value_lmc) * 100.0
+            beats_cell = f"{beats:.1f}% (p = {self.p_value_lmc:.3f})"
         if n_collapsed:
             lmc = (
                 f"{self.given_lmc_violations} / {self.n_lmc_tests} requested "
@@ -356,7 +418,7 @@ class FalsificationResult(ResultReprMixin):
                 f"{self.n_in_mec} / {self.n_permutations} (p = {self.p_value_tpa:.3f})",
             ),
             ("LMC violations (given DAG)", lmc),
-            ("Beats permuted baseline", f"{beats:.1f}% (p = {self.p_value_lmc:.3f})"),
+            ("Beats permuted baseline", beats_cell),
         ]
         body = "".join(
             f"<tr><td>{label}</td><td>{value}</td></tr>" for label, value in rows
@@ -441,17 +503,28 @@ class FalsificationResult(ResultReprMixin):
 
             fig = cast("matplotlib.figure.Figure", ax.get_figure())
 
-        ax.hist(
-            [self.perm_lmc_violation_fractions, self.perm_tpa_violation_fractions],
-            bins=bins,
-            alpha=0.5,
-            color=["tab:blue", "tab:orange"],
-            edgecolor="k",
-            label=[
-                "LMC violations (permuted DAGs)",
-                "tPA d-sep violations (permuted DAGs)",
-            ],
-        )
+        lmc_fractions = self.perm_lmc_violation_fractions
+        if len(lmc_fractions) == 0:
+            ax.hist(
+                self.perm_tpa_violation_fractions,
+                bins=bins,
+                alpha=0.5,
+                color="tab:orange",
+                edgecolor="k",
+                label="tPA d-sep violations (permuted DAGs)",
+            )
+        else:
+            ax.hist(
+                [lmc_fractions, self.perm_tpa_violation_fractions],
+                bins=bins,
+                alpha=0.5,
+                color=["tab:blue", "tab:orange"],
+                edgecolor="k",
+                label=[
+                    "LMC violations (permuted DAGs)",
+                    "tPA d-sep violations (permuted DAGs)",
+                ],
+            )
         ylim = ax.get_ylim()[1]
         ax.plot(
             [self.given_lmc_violation_fraction] * 2,
@@ -470,9 +543,9 @@ class FalsificationResult(ResultReprMixin):
         ax.set_ylim((0, ylim))
         ax.set_xlabel("Fraction of violations")
         ax.set_ylabel("# permuted DAGs")
+        p_lmc = "n/a" if len(lmc_fractions) == 0 else f"{self.p_value_lmc:.3f}"
         ax.set_title(
-            f"DAG falsification "
-            f"(p_LMC = {self.p_value_lmc:.3f}, p_tPA = {self.p_value_tpa:.3f})"
+            f"DAG falsification (p_LMC = {p_lmc}, p_tPA = {self.p_value_tpa:.3f})"
         )
         ax.legend(loc="best", fontsize="small")
         return fig
@@ -786,21 +859,27 @@ def falsify_graph(
             permuted, tester, significance_ci, include_unconditional
         )
         tpa_tests, tpa_viol = _validate_tpa(permuted, dag, include_unconditional)
-        perm_lmc_fractions.append(lmc_viol / lmc_tests if lmc_tests else 0.0)
+        # An empty written set is not zero violations. Scoring it as 0
+        # would publish "not tested" as a perfect LMC baseline.
+        if lmc_tests:
+            perm_lmc_fractions.append(lmc_viol / lmc_tests)
         perm_tpa_fractions.append(tpa_viol / tpa_tests if tpa_tests else 0.0)
         if tpa_viol == 0:
             n_in_mec += 1
 
     perm_lmc = np.asarray(perm_lmc_fractions, dtype=float)
     perm_tpa = np.asarray(perm_tpa_fractions, dtype=float)
-    n_evaluated = len(perm_lmc)
+    n_evaluated = len(perm_tpa)
 
-    if n_evaluated > 0:
-        p_value_lmc = float(np.mean(perm_lmc <= given_fraction))
-        p_value_tpa = float(np.mean(perm_tpa <= 0.0))
-    else:
+    if n_evaluated == 0:
         p_value_lmc = 1.0
         p_value_tpa = 1.0
+    else:
+        p_value_tpa = float(np.mean(perm_tpa <= 0.0))
+        if len(perm_lmc) == 0:
+            p_value_lmc = float("nan")
+        else:
+            p_value_lmc = float(np.mean(perm_lmc <= given_fraction))
 
     return FalsificationResult(
         given_lmc_violations=given_violations,

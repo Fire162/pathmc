@@ -740,6 +740,56 @@ class TestRankCollapseIsVisible:
         with pytest.raises(RuntimeError, match="rank-collapsed"):
             result.plot()
 
+    def test_collapsed_only_permutation_is_not_a_perfect_lmc_score(self):
+        rng = np.random.default_rng(0)
+        n = 200
+        a = rng.normal(size=n)
+        x = 0.8 * a + rng.normal(scale=0.3, size=n)
+        z = 0.8 * a + rng.normal(scale=0.3, size=n)
+        y = 0.5 * a + 0.5 * x + 0.5 * z + rng.normal(scale=0.3, size=n)
+        w = 0.5 * a + 0.8 * y + rng.normal(scale=0.3, size=n)
+        frame = pd.DataFrame({
+            "A": a,
+            "X": x,
+            "Z": z,
+            "Y": y,
+            "W": w,
+            "C": np.ones(n),
+        })
+        model = pathmc.model(
+            "X ~ A\nZ ~ A\nY ~ A + X + Z\nW ~ Y + A\nC ~ A",
+            data=frame,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            result = model.falsify(
+                n_permutations=120,
+                random_seed=4,
+                include_unconditional=False,
+            )
+        scored = np.asarray(result.perm_lmc_violation_fractions)
+        omitted = result.n_permutations - len(scored)
+        assert len(result.perm_tpa_violation_fractions) == result.n_permutations
+        assert omitted > 0
+        assert result.p_value_tpa == pytest.approx(
+            result.n_in_mec / result.n_permutations
+        )
+        scored_p = float(np.mean(scored <= result.given_lmc_violation_fraction))
+        inflated = np.concatenate([scored, np.zeros(omitted)])
+        inflated_p = float(np.mean(inflated <= result.given_lmc_violation_fraction))
+        assert result.p_value_lmc == pytest.approx(scored_p)
+        assert inflated_p > result.significance_level
+        assert result.p_value_lmc <= result.significance_level
+        assert result.falsified is False
+        text = "\n".join(result._summary_lines())
+        assert "not in that fraction" in text
+        assert f"{inflated_p:.3f}" not in text
+        html = result._repr_html_()
+        assert f"{omitted} omitted" in html
+        assert f"{inflated_p:.3f}" not in html
+        fig = result.plot()
+        assert fig.axes[0].get_title().startswith("DAG falsification")
+
     def test_falsify_full_rank_parents_do_not_warn(self, frame):
         model = pathmc.model("M ~ X\nY ~ M", data=frame[["X", "M", "Y"]])
         with warnings.catch_warnings():

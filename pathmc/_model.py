@@ -1674,8 +1674,10 @@ class PathModel:
         parent) sets ``rank_collapsed`` and warns. That row stays in the
         frame, but ``given_lmc_violations``, ``n_lmc_tests``,
         ``violations``, and the permutation fraction all exclude it.
-        The summary names the collapsed count separately. If every
-        requested test collapses, the DAG cannot be evaluated.
+        A permuted DAG that produced no written parental test is omitted
+        from that fraction, not scored as zero violations. The summary
+        names the collapsed count separately. If every requested test
+        collapses, the DAG cannot be evaluated.
 
         Uses the observed data, not the posterior, and works before
         sampling. Models with residual covariances (``~~``) are not
