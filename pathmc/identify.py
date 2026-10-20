@@ -127,7 +127,12 @@ def _backdoor_separated(
     ``nx.is_d_separator`` is polynomial in the graph size. Enumerating
     simple paths is exponential in the number of paths, which made
     identification unusable around 16–20 nodes.
+
+    Equal endpoints are not a backdoor query: NetworkX rejects a separator
+    whose sets are not disjoint, and a variable is not a cause of itself.
     """
+    if treatment == outcome:
+        return False
     return nx.is_d_separator(
         _mutilate_outgoing(dag, treatment), {treatment}, {outcome}, z
     )
