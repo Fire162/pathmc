@@ -20,9 +20,11 @@ labeled coefficients (label*variable), and intercept suppression (0 +).
 
 from __future__ import annotations
 
+import ast
 import math
 import re
 from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from pathmc.exceptions import DuplicateEquationError, ParseError
 
@@ -78,6 +80,43 @@ class HSGPCall:
     L: float | None = None
     cov: str = "expquad"
     centered: bool = False
+    identifier: str | None = None
+
+    @property
+    def name(self) -> str:
+        """Return the registry name for this backwards-compatible call node."""
+        return "hsgp"
+
+
+@dataclass
+class BasisCall:
+    """A parsed basis-term call with literal, basis-specific parameters.
+
+    Basis terms produce one or more columns and own their coefficient vector,
+    unlike transforms, which preserve the one-column/one-coefficient contract.
+    """
+
+    name: str
+    variable: str
+    params: dict[str, int | float]
+    identifier: str | None = None
+
+
+@dataclass
+class CategoricalCall:
+    """A categorical predictor expanded into indicator columns.
+
+    ``levels``, ``reference``, and ``columns`` are fit-time state. They are
+    populated from the observed data before compilation and then reused for
+    prediction and interventions so the coding cannot silently change.
+    Which term supplies the baseline is not stored on the call.
+    """
+
+    variable: str
+    reference: Any | None = None
+    prior: Literal["independent", "hierarchical"] = "independent"
+    levels: tuple[Any, ...] = ()
+    columns: tuple[str, ...] = ()
 
 
 @dataclass
@@ -95,7 +134,13 @@ class Term:
     lag_of: str | None = None
     interaction_of: tuple[str, ...] | None = None
     fixed_value: float | None = None
-    hsgp: HSGPCall | None = None
+    basis: BasisCall | HSGPCall | None = None
+    categorical: CategoricalCall | None = None
+
+    @property
+    def hsgp(self) -> HSGPCall | None:
+        """Return the HSGP call for backwards-compatible internal access."""
+        return self.basis if isinstance(self.basis, HSGPCall) else None
 
 
 @dataclass
@@ -171,7 +216,8 @@ def parse_spec(spec_string: str) -> Spec:
     ParseError
         On malformed syntax (missing RHS, invalid operators, etc.).
     DuplicateEquationError
-        If two regressions share the same LHS variable.
+        If two regressions share the same LHS variable, or a coefficient
+        label is reused across equations.
     """
     spec_string = _join_continuation_lines(spec_string)
     raw_statements = re.split(r"[;\n]", spec_string)
@@ -186,6 +232,7 @@ def parse_spec(spec_string: str) -> Spec:
     residual_covs: list[ResidualCov] = []
     defined_params: list[DefinedParam] = []
     seen_lhs: set[str] = set()
+    seen_labels: dict[str, str] = {}
 
     for stmt in statements:
         if ":=" in stmt:
@@ -194,11 +241,31 @@ def parse_spec(spec_string: str) -> Spec:
             residual_covs.append(_parse_residual_cov(stmt))
         elif "~" in stmt:
             reg = _parse_regression(stmt)
+            _assign_basis_identifiers(reg)
             if reg.lhs in seen_lhs:
                 raise DuplicateEquationError(
                     f"Duplicate equation for '{reg.lhs}'. "
                     "Each variable can appear as LHS in at most one regression."
                 )
+            labels_in_stmt: list[str] = []
+            for term in reg.terms:
+                if term.label is None:
+                    continue
+                if term.label in labels_in_stmt:
+                    raise DuplicateEquationError(
+                        f"Label '{term.label}' used more than once in '{stmt}'. "
+                        "Each label must be unique. Use different labels "
+                        "(e.g., 'a1', 'a2') for distinct coefficients."
+                    )
+                labels_in_stmt.append(term.label)
+                if term.label in seen_labels:
+                    raise DuplicateEquationError(
+                        f"Label '{term.label}' used in both "
+                        f"'{seen_labels[term.label]}' and '{stmt}'. "
+                        "Each label must be unique. Use different labels "
+                        "(e.g., 'a1', 'a2') for distinct coefficients."
+                    )
+                seen_labels[term.label] = stmt
             seen_lhs.add(reg.lhs)
             regressions.append(reg)
         else:
@@ -213,6 +280,20 @@ def parse_spec(spec_string: str) -> Spec:
         residual_covs=residual_covs,
         defined_params=defined_params,
     )
+
+
+def _assign_basis_identifiers(reg: Regression) -> None:
+    """Disambiguate basis calls sharing one equation input."""
+    grouped: dict[str, list[Term]] = {}
+    for term in reg.terms:
+        if term.basis is not None:
+            grouped.setdefault(term.basis.variable, []).append(term)
+    for terms in grouped.values():
+        if len(terms) < 2 or all(isinstance(term.basis, HSGPCall) for term in terms):
+            continue
+        for index, term in enumerate(terms, start=1):
+            assert term.basis is not None
+            term.basis.identifier = str(index)
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +355,71 @@ def _parse_regression(stmt: str) -> Regression:
             "equation (multiple smooths of one variable are a follow-up)."
         )
 
-    return Regression(lhs=lhs, terms=terms, has_intercept=has_intercept)
+    regression = Regression(lhs=lhs, terms=terms, has_intercept=has_intercept)
+
+    return regression
+
+
+#: A float mantissa immediately followed by its exponent marker, anchored so
+#: the digits start a fresh token: ``1e``, ``2.5E``, ``.5e`` all match, but the
+#: trailing ``2e`` of an identifier such as ``x2e`` does not.
+_FLOAT_EXPONENT_RE = re.compile(r"(?:^|[^0-9A-Za-z_.])(?:\d+\.?\d*|\.\d+)[eE]$")
+
+
+def _is_float_exponent_sign(raw: str, i: int) -> bool:
+    """Is ``raw[i]`` (a ``-``) the exponent sign of a float literal?
+
+    Checking only that the preceding character is ``e``/``E`` is not enough:
+    an identifier ending in ``e`` (``response-1``, ``income-1``, ``rate-1``)
+    would then slip past the R-style-subtraction guard and become a single
+    garbage variable name that only fails later, at data binding. The ``e``
+    must terminate an actual numeric mantissa and be followed by digits.
+    """
+    if i == 0 or raw[i - 1] not in {"e", "E"}:
+        return False
+    if not _FLOAT_EXPONENT_RE.search(raw[:i]):
+        return False
+    return i + 1 < len(raw) and raw[i + 1].isdigit()
+
+
+def _reject_top_level_minus(raw: str) -> None:
+    """Reject R/patsy-style subtraction such as ``x - 1`` or ``-x``.
+
+    pathmc's DSL is purely additive: terms are joined with ``+``, the
+    intercept is controlled with a standalone ``0`` or ``1`` term, and a
+    fixed coefficient (which may itself be negative, e.g. ``-1*x``) uses
+    ``value*variable``. There is no formula algebra where ``-`` removes a
+    term. Without this check, something like ``y ~ x - 1`` parses
+    "successfully" into a term literally named ``"x - 1"``, which then
+    fails much later with a confusing "column not found" error at data
+    binding or compile time instead of a clear parse error (issue #316's
+    crash-vector concern for intercept-removal syntax applies here too).
+
+    The same guard also rejects hyphenated plain terms (``my-var``) and
+    coefficient labels (``my-label*x``): ``-`` is never a name character
+    in the DSL, so use underscores instead (``my_var``, ``my_label*x``).
+    """
+    star_pos = _find_top_level_star(raw)
+    depth = 0
+    for i, ch in enumerate(raw):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "-" and depth == 0:
+            if i == 0 and star_pos is not None and i < star_pos:
+                # Leading '-' of a fixed-value coefficient, e.g. "-1*x".
+                continue
+            if _is_float_exponent_sign(raw, i):
+                # Exponent sign in a float literal, e.g. "1e-5*x".
+                continue
+            raise ParseError(
+                f"Unsupported '-' in term '{raw}'. pathmc's formula DSL is "
+                "additive only (terms are joined with '+'); it does not "
+                "support R/patsy-style subtraction. To drop the intercept, "
+                "use '0 + ...' (not '... - 1'); to fix a coefficient, use "
+                "'value*variable' (e.g. '-1*x')."
+            )
 
 
 def _parse_term(raw: str) -> Term:
@@ -284,6 +429,7 @@ def _parse_term(raw: str) -> Term:
     coefficient values rather than free parameter names.
     """
     raw = raw.strip()
+    _reject_top_level_minus(raw)
     label: str | None = None
     fixed_value: float | None = None
 
@@ -300,8 +446,26 @@ def _parse_term(raw: str) -> Term:
             except ValueError:
                 label = label_str
 
+    if _find_top_level_colon(raw) is not None and re.search(r"(?:^|:)\s*C\s*\(", raw):
+        raise ParseError(
+            f"Categorical interaction '{raw}' is not supported. Use C(...) as "
+            "a standalone term and model category-specific effects separately."
+        )
+
     if "(" in raw:
         func_name = raw[: raw.index("(")].strip()
+        if func_name == "C":
+            if label is not None or fixed_value is not None:
+                raise ParseError(
+                    "C(...) cannot take a coefficient prefix because it expands "
+                    "to one coefficient per non-reference level. Remove the "
+                    "'k*' or 'label*' prefix."
+                )
+            categorical_call = _parse_categorical_expr(raw)
+            return Term(
+                variable=categorical_call.variable,
+                categorical=categorical_call,
+            )
         if func_name == "hsgp":
             if label is not None or fixed_value is not None:
                 raise ParseError(
@@ -310,7 +474,23 @@ def _parse_term(raw: str) -> Term:
                     "'label*' prefix."
                 )
             call = _parse_hsgp_expr(raw)
-            return Term(variable=call.variable, hsgp=call)
+            return Term(variable=call.variable, basis=call)
+        if func_name == "fourier":
+            if label is not None or fixed_value is not None:
+                raise ParseError(
+                    "fourier(...) cannot take a coefficient prefix; the basis "
+                    "carries its own weights. Remove the 'k*' or 'label*' prefix."
+                )
+            basis_call = _parse_fourier_expr(raw)
+            return Term(variable=basis_call.variable, basis=basis_call)
+        if _is_registered_basis(func_name):
+            if label is not None or fixed_value is not None:
+                raise ParseError(
+                    f"{func_name}(...) cannot take a coefficient prefix; basis "
+                    "terms carry their own weights."
+                )
+            basis_call = _parse_registered_basis_expr(raw)
+            return Term(variable=basis_call.variable, basis=basis_call)
         # Misspelled/misplaced hsgp would otherwise fall through to the
         # transform registry and fail late with "Unknown transform 'z:hsgp'".
         if any(part.strip().lower() == "hsgp" for part in func_name.split(":")):
@@ -346,6 +526,63 @@ def _parse_term(raw: str) -> Term:
     if not variable:
         raise ParseError("Empty variable name in term.")
     return Term(variable=variable, label=label, fixed_value=fixed_value)
+
+
+_CATEGORICAL_ALLOWED_KWARGS = frozenset({"reference", "prior"})
+
+
+def _parse_categorical_expr(raw: str) -> CategoricalCall:
+    """Parse ``C(variable, reference=..., prior=...)``."""
+    if raw[-1] != ")":
+        raise ParseError(
+            f"Unclosed parenthesis in categorical term: '{raw}'. Add a closing ')'."
+        )
+    inner = raw[raw.index("(") + 1 : -1].strip()
+    args = _split_top_level_args(inner)
+    if not args or not args[0].strip() or "=" in args[0]:
+        raise ParseError(
+            "C(...) requires a column name as its first argument. "
+            "Example: C(region, reference='north')."
+        )
+    variable = args[0].strip()
+    if not re.match(r"^[A-Za-z_]\w*$", variable):
+        raise ParseError(
+            f"C(...) input must be a plain variable name, got '{variable}'."
+        )
+
+    kwargs: dict[str, Any] = {}
+    for arg in args[1:]:
+        if "=" not in arg:
+            raise ParseError(
+                f"Expected keyword parameter in C(...), got '{arg.strip()}'. "
+                "Use reference=... or prior=...."
+            )
+        key, _, raw_value = arg.partition("=")
+        key = key.strip()
+        raw_value = raw_value.strip()
+        if key not in _CATEGORICAL_ALLOWED_KWARGS:
+            raise ParseError(
+                f"Unknown C(...) parameter '{key}'. Valid parameters are "
+                "'reference' and 'prior'."
+            )
+        if key in kwargs:
+            raise ParseError(f"Duplicate keyword '{key}' in C(...).")
+        try:
+            value = ast.literal_eval(raw_value)
+        except (ValueError, SyntaxError):
+            value = raw_value
+        kwargs[key] = value
+
+    prior = kwargs.get("prior", "independent")
+    if prior not in {"independent", "hierarchical"}:
+        raise ParseError(
+            f"C(...) prior must be 'independent' or 'hierarchical', got {prior!r}."
+        )
+    return CategoricalCall(
+        variable=variable,
+        reference=kwargs.get("reference"),
+        prior=prior,
+    )
 
 
 def _make_lag_term(tc: TransformCall, raw: str, label: str | None) -> Term:
@@ -403,6 +640,19 @@ def _find_top_level_star(raw: str) -> int | None:
     return None
 
 
+def _find_top_level_colon(raw: str) -> int | None:
+    """Find a ``:`` outside parentheses, or return ``None``."""
+    depth = 0
+    for i, ch in enumerate(raw):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == ":" and depth == 0:
+            return i
+    return None
+
+
 def _parse_transform_expr(raw: str) -> TransformCall:
     """Recursively parse ``name(input, key=val, ...)``."""
     raw = raw.strip()
@@ -438,13 +688,16 @@ def _parse_transform_expr(raw: str) -> TransformCall:
         )
 
     if "(" in input_raw:
-        if input_raw[: input_raw.index("(")].strip() == "hsgp":
+        input_name = input_raw[: input_raw.index("(")].strip()
+        if input_name in {"hsgp", "fourier"} or _is_registered_basis(input_name):
             raise ParseError(
-                "hsgp(...) cannot be nested inside a transform. "
-                "Apply hsgp() directly to a variable."
+                f"Basis expression '{input_raw}' cannot be nested inside "
+                f"transform '{raw}'. Apply {input_name}(...) directly to a "
+                "variable as a standalone term."
             )
         input_expr: str | TransformCall = _parse_transform_expr(input_raw)
     else:
+        _reject_top_level_minus(input_raw)
         input_expr = input_raw
 
     params: dict[str, str] = {}
@@ -629,6 +882,109 @@ def _parse_hsgp_expr(raw: str) -> HSGPCall:
         cov=cov,
         centered=centered_raw == "true",
     )
+
+
+def _parse_fourier_expr(raw: str) -> BasisCall:
+    """Parse ``fourier(x, n=..., period=...)`` into a generic basis call."""
+    inner = raw[raw.index("(") + 1 : -1].strip()
+    args = _split_top_level_args(inner)
+    if not args or not args[0].strip() or "=" in args[0]:
+        raise ParseError(
+            "fourier(...) requires an input variable as its first argument. "
+            "Example: fourier(week, n=3, period=52)."
+        )
+    variable = args[0].strip()
+    if not re.match(r"^[A-Za-z_]\w*$", variable):
+        raise ParseError(
+            f"fourier(...) input must be a plain variable name, got '{variable}'."
+        )
+
+    kwargs: dict[str, str] = {}
+    for arg in args[1:]:
+        if "=" not in arg:
+            raise ParseError(
+                f"fourier(...) expects keyword parameters, got '{arg.strip()}'."
+            )
+        key, _, value = arg.partition("=")
+        key, value = key.strip(), value.strip()
+        if key in kwargs:
+            raise ParseError(f"Duplicate keyword '{key}' in fourier(...).")
+        kwargs[key] = value
+    if set(kwargs) != {"n", "period"}:
+        raise ParseError(
+            "fourier(...) requires exactly n=<int> and period=<positive number>."
+        )
+    try:
+        n = int(kwargs["n"])
+    except ValueError:
+        raise ParseError(
+            f"fourier(...) n must be an integer, got '{kwargs['n']}'."
+        ) from None
+    try:
+        period = float(kwargs["period"])
+    except ValueError:
+        raise ParseError(
+            f"fourier(...) period must be a number, got '{kwargs['period']}'."
+        ) from None
+    if n < 1:
+        raise ParseError(f"fourier(...) n must be >= 1, got {n}.")
+    if not math.isfinite(period) or period <= 0:
+        raise ParseError(
+            f"fourier(...) period must be a finite number > 0, got {period}."
+        )
+    return BasisCall(
+        name="fourier", variable=variable, params={"n": n, "period": period}
+    )
+
+
+def _is_registered_basis(name: str) -> bool:
+    """Return whether *name* is currently registered as a custom basis."""
+    from pathmc.basis import get_basis
+
+    try:
+        get_basis(name)
+    except ValueError:
+        return False
+    return True
+
+
+def _parse_registered_basis_expr(raw: str) -> BasisCall:
+    """Parse a custom basis call with numeric literal keyword parameters."""
+    name = raw[: raw.index("(")].strip()
+    inner = raw[raw.index("(") + 1 : -1].strip()
+    args = _split_top_level_args(inner)
+    if not args or not args[0].strip() or "=" in args[0]:
+        raise ParseError(
+            f"{name}(...) requires an input variable as its first argument."
+        )
+    variable = args[0].strip()
+    if not re.match(r"^[A-Za-z_]\w*$", variable):
+        raise ParseError(
+            f"{name}(...) input must be a plain variable name, got '{variable}'."
+        )
+    params: dict[str, int | float] = {}
+    for arg in args[1:]:
+        if "=" not in arg:
+            raise ParseError(
+                f"{name}(...) expects keyword parameters, got '{arg.strip()}'."
+            )
+        key, _, value = arg.partition("=")
+        key, value = key.strip(), value.strip()
+        if not key or not value or key in params:
+            raise ParseError(
+                f"Malformed or duplicate parameter '{arg}' in {name}(...)."
+            )
+        try:
+            params[key] = int(value)
+        except ValueError:
+            try:
+                params[key] = float(value)
+            except ValueError:
+                raise ParseError(
+                    f"{name}(...) parameter '{key}' must be a numeric literal, got "
+                    f"'{value}'."
+                ) from None
+    return BasisCall(name=name, variable=variable, params=params)
 
 
 def _split_top_level_args(s: str) -> list[str]:

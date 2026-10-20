@@ -23,16 +23,57 @@ import re
 
 import graphviz
 
+from pathmc.categorical import (
+    absorbs_intercept,
+    has_population_mean,
+    keeps_every_level,
+    sums_to_zero,
+)
 from pathmc.graph import GraphInfo
-from pathmc.parse import Spec, Term, TransformCall
+from pathmc.panel import PanelInfo
+from pathmc.parse import CategoricalCall, Regression, Spec, Term, TransformCall
 
 __all__: list[str] = []
+
+
+def _format_categorical(reg: Regression, call: CategoricalCall) -> str:
+    """Render a ``C(...)`` term, showing only the state that applies to it.
+
+    The reference is shown only when the term does not keep every level, and
+    levels only once they have been resolved from data.
+    """
+    parts = [call.variable]
+    if _shows_reference(reg, call):
+        parts.append(f"reference={call.reference!r}")
+    if call.prior == "hierarchical":
+        parts.append("prior='hierarchical'")
+    if call.levels:
+        levels = ", ".join(repr(level) for level in call.levels)
+        parts.append(f"levels=[{levels}]")
+    return f"C({', '.join(parts)})"
+
+
+def _shows_reference(reg: Regression, call: CategoricalCall) -> bool:
+    """Whether the reference level is meaningful enough to display.
+
+    A term that keeps every level has no reference. Before data resolution
+    only an explicit ``reference=`` is known, and it is shown when that term
+    is not the baseline and is not hierarchical. After resolution a
+    treatment-coded term always carries a reference.
+    """
+    if keeps_every_level(reg, call):
+        return False
+    if not call.levels:
+        return call.reference is not None
+    return True
+
 
 _GREEK = {
     "alpha": r"\alpha",
     "beta": r"\beta",
     "gamma": r"\gamma",
     "delta": r"\delta",
+    "ell": r"\ell",
     "epsilon": r"\epsilon",
     "zeta": r"\zeta",
     "eta": r"\eta",
@@ -60,22 +101,58 @@ _GREEK_PATTERN = re.compile(
 )
 
 
+def _latex_index(name: str) -> str:
+    r"""Render a name as the contents of a subscript group.
+
+    Underscore-separated tokens become comma-separated indices, so
+    ``hsgp_y_x`` -> ``hsgp,y,x``. A verbatim underscore inside a subscript
+    group is a TeX double-subscript error (``\beta_{hsgp_y_x}``): KaTeX
+    aborts the enclosing ``aligned`` block and renders the raw source.
+    """
+    return name.replace("_", ",")
+
+
+def _latex_escape(text: str) -> str:
+    r"""Escape underscores in literal text placed inside a TeX group.
+
+    An unescaped ``_`` is a subscript operator in math mode and an outright
+    parse error in ``\text{}``; either way KaTeX gives up on the enclosing
+    block. ``\_`` renders the character itself in both modes.
+    """
+    return text.replace("_", r"\_")
+
+
+def _latex_symbol(name: str) -> str:
+    r"""Render a variable name as an upright math symbol.
+
+    Underscores are escaped rather than turned into indices — the name is
+    shown as written, not as a multi-index. ``\mathrm{y_t_1}`` is the same
+    double-subscript error as in :func:`_latex_index`, so the escape is
+    required, not cosmetic.
+    """
+    return rf"\mathrm{{{_latex_escape(name)}}}"
+
+
 def _latexify_name(name: str) -> str:
     """Convert a parameter name to LaTeX, recognising Greek prefixes.
 
     Examples: ``theta_tv`` -> ``\\theta_{tv}``, ``b_tv`` -> ``b_{tv}``,
-    ``sigma`` -> ``\\sigma``.
+    ``sigma`` -> ``\\sigma``, ``beta_hsgp_y_x`` -> ``\\beta_{hsgp,y,x}``.
+
+    Underscore-separated suffix tokens become comma-separated indices: a
+    verbatim underscore inside the subscript is a TeX double-subscript
+    error that makes MathJax render the whole block as raw source.
     """
     m = _GREEK_PATTERN.match(name)
     if m:
         base = _GREEK[m.group(1)]
         suffix = m.group(2)
         if suffix:
-            return rf"{base}_{{{suffix}}}"
+            return rf"{base}_{{{_latex_index(suffix)}}}"
         return base
     if "_" in name:
         head, tail = name.split("_", 1)
-        return rf"{head}_{{{tail}}}"
+        return rf"{head}_{{{_latex_index(tail)}}}"
     return name
 
 
@@ -186,11 +263,11 @@ def _latexify_prior(prior_str: str) -> str:
     """
     m = re.match(r"(\w+)\((.+)\)$", prior_str)
     if not m:
-        return rf"\text{{{prior_str}}}"
+        return rf"\text{{{_latex_escape(prior_str)}}}"
     dist_name = m.group(1)
     args = m.group(2)
-    args_latex = r",\, ".join(a.strip() for a in args.split(","))
-    return rf"\text{{{dist_name}}}({args_latex})"
+    args_latex = r",\, ".join(_latex_escape(a.strip()) for a in args.split(","))
+    return rf"\text{{{_latex_escape(dist_name)}}}({args_latex})"
 
 
 def build_dag_viz(
@@ -308,12 +385,12 @@ def build_equations(
     for reg in spec.regressions:
         terms: list[str] = []
         latex_terms: list[str] = []
-        if reg.has_intercept:
+        if reg.has_intercept and not absorbs_intercept(reg):
             terms.append("1")
-            latex_terms.append(rf"\beta_{{0,\,{reg.lhs}}}")
+            latex_terms.append(rf"\beta_{{0,\,{_latex_index(reg.lhs)}}}")
         for t in reg.terms:
-            terms.append(_format_term(t))
-            latex_terms.append(_format_term_latex(t))
+            terms.append(_format_term(t, reg))
+            latex_terms.append(_format_term_latex(t, reg))
 
         is_stochastic_latent = (
             reg.lhs in latent and families.get(reg.lhs) == "latent_normal"
@@ -343,7 +420,7 @@ def build_equations(
     return EquationList(lines, latex_lines)
 
 
-def _format_term(t: Term) -> str:
+def _format_term(t: Term, reg: Regression) -> str:
     """Format a term for equation display, including transform expressions."""
     prefix = ""
     if t.fixed_value is not None:
@@ -354,8 +431,12 @@ def _format_term(t: Term) -> str:
     elif t.label:
         prefix = f"{t.label}*"
 
-    if t.hsgp is not None:
-        return f"f_hsgp({t.hsgp.variable})"
+    if t.basis is not None:
+        from pathmc.basis import get_basis
+
+        return get_basis(t.basis.name).render(t.basis)
+    if t.categorical is not None:
+        return _format_categorical(reg, t.categorical)
     if t.transform is not None:
         return f"{prefix}{_format_transform(t.transform)}"
     if t.interaction_of is not None:
@@ -368,19 +449,20 @@ _MULTILINE_THRESHOLD = 4
 
 def _likelihood_latex(lhs: str, family: str) -> str:
     """Build the distributional likelihood line in LaTeX."""
-    lhs_latex = rf"\mathrm{{{lhs}}}"
-    mu = rf"\mu_{{{lhs}}}"
-    sigma = rf"\sigma_{{{lhs}}}"
+    lhs_latex = _latex_symbol(lhs)
+    idx = _latex_index(lhs)
+    mu = rf"\mu_{{{idx}}}"
+    sigma = rf"\sigma_{{{idx}}}"
 
     if family == "bernoulli":
         return rf"{lhs_latex} &\sim \text{{Bernoulli}}(\text{{logit}}^{{-1}}({mu}))"
     if family == "poisson":
         return rf"{lhs_latex} &\sim \text{{Poisson}}(\exp({mu}))"
     if family == "negbinomial":
-        alpha = rf"\alpha_{{\text{{disp}},\,{lhs}}}"
+        alpha = rf"\alpha_{{\text{{disp}},\,{idx}}}"
         return rf"{lhs_latex} &\sim \text{{NegBinomial}}(\exp({mu}),\, {alpha})"
     if family == "studentt":
-        nu = rf"\nu_{{{lhs}}}"
+        nu = rf"\nu_{{{idx}}}"
         return rf"{lhs_latex} &\sim \text{{StudentT}}({nu},\, {mu},\, {sigma})"
     return rf"{lhs_latex} &\sim \text{{Normal}}({mu},\, {sigma})"
 
@@ -414,7 +496,7 @@ def _build_equation_latex(
     Deterministic equations produce a single :math:`\equiv` line.
     Long linear predictors are split across multiple lines.
     """
-    lhs_latex = rf"\mathrm{{{lhs}}}"
+    lhs_latex = _latex_symbol(lhs)
 
     if deterministic:
         if len(latex_terms) < _MULTILINE_THRESHOLD:
@@ -429,7 +511,7 @@ def _build_equation_latex(
                 result.append(rf"&\quad + {term}")
         return result
 
-    mu_lhs = rf"\mu_{{{lhs}}}"
+    mu_lhs = rf"\mu_{{{_latex_index(lhs)}}}"
 
     if len(latex_terms) < _MULTILINE_THRESHOLD:
         rhs = " + ".join(latex_terms)
@@ -446,7 +528,7 @@ def _build_equation_latex(
     return result
 
 
-def _format_term_latex(t: Term) -> str:
+def _format_term_latex(t: Term, reg: Regression) -> str:
     """Format a term as LaTeX, including transform expressions."""
     if t.fixed_value is not None:
         fv = (
@@ -458,15 +540,29 @@ def _format_term_latex(t: Term) -> str:
     else:
         prefix = ""
 
-    if t.hsgp is not None:
-        return rf"f_{{\mathrm{{hsgp}}}}(\mathrm{{{t.hsgp.variable}}})"
+    if t.basis is not None:
+        from pathmc.basis import get_basis
+
+        return get_basis(t.basis.name).render_latex(_latex_symbol(t.basis.variable))
+    if t.categorical is not None:
+        call = t.categorical
+        parts = [_latex_symbol(call.variable)]
+        if _shows_reference(reg, call):
+            parts.append(rf"\mathrm{{ref}}={_latex_escape(str(call.reference))}")
+        if call.prior == "hierarchical":
+            parts.append(r"\mathrm{prior}=\mathrm{hierarchical}")
+        if call.levels:
+            levels = ", ".join(str(level) for level in call.levels)
+            parts.append(rf"\mathrm{{levels}}=\{{{_latex_escape(levels)}\}}")
+        separator = r";\,"
+        return rf"\operatorname{{C}}({separator.join(parts)})"
     if t.transform is not None:
         return f"{prefix}{_format_transform_latex(t.transform)}"
     if t.interaction_of is not None:
-        parts = [rf"\mathrm{{{v}}}" for v in t.interaction_of]
+        parts = [_latex_symbol(v) for v in t.interaction_of]
         expr = r" \times ".join(parts)
         return f"{prefix}{expr}"
-    var_expr = rf"\mathrm{{{t.variable}}}"
+    var_expr = _latex_symbol(t.variable)
     return f"{prefix}{var_expr}" if prefix else var_expr
 
 
@@ -486,10 +582,10 @@ def _format_transform_latex(tc: TransformCall) -> str:
     if isinstance(tc.input_expr, TransformCall):
         input_str = _format_transform_latex(tc.input_expr)
     else:
-        input_str = rf"\mathrm{{{tc.input_expr}}}"
+        input_str = _latex_symbol(tc.input_expr)
     param_strs = [rf"{_latexify_name(v)}" for v in tc.params.values()]
     all_args = [input_str] + param_strs
-    name_latex = rf"\operatorname{{{tc.name}}}"
+    name_latex = rf"\operatorname{{{_latex_escape(tc.name)}}}"
     joined = r",\, ".join(all_args)
     return rf"{name_latex}({joined})"
 
@@ -525,6 +621,7 @@ def build_priors(
     pooling: str | dict | None = None,
     latent: set[str] | None = None,
     prior_config: dict[str, object] | None = None,
+    panel_info: PanelInfo | None = None,
 ) -> PriorTable:
     """Build a prior summary table from the model specification.
 
@@ -556,10 +653,42 @@ def build_priors(
         isinstance(pooling, dict) and pooling.get("intercept", False)
     )
     slope_vars: list[str] = []
+
+    from pathmc.compile import (
+        _is_scan_panel,
+        _parse_by_var_pooling,
+        get_free_predictor_columns,
+    )
+
+    by_var_entries: dict[str, dict[str, object]] = {}
     if isinstance(pooling, dict):
         slope_vars = list(pooling.get("slopes", []))
+        try:
+            by_var_entries = _parse_by_var_pooling(pooling, spec, require_panel=False)
+        except ValueError:
+            # Introspection is display-only; a malformed config will be
+            # reported with full context when the model is compiled.
+            pass
 
-    from pathmc.compile import get_free_predictor_columns
+    coef_names = {
+        n
+        for n, e in by_var_entries.items()
+        if e["kind"] in ("coefficient", "none_coefficient")
+    }
+
+    # Estimated initial conditions (``init_{var}``) exist only for latent
+    # variables that feed a ``lag()`` term in scan-compiled panel models:
+    # those are the latents whose recursion actually reads its t=0 state.
+    lag_base_vars = (
+        {
+            term.lag_of
+            for reg in spec.regressions
+            for term in reg.terms
+            if term.lag_of is not None
+        }
+        if _is_scan_panel(spec, panel_info)
+        else set()
+    )
 
     def _entry(key: str, default_str: str) -> str:
         if prior_config and key in prior_config:
@@ -569,7 +698,8 @@ def build_priors(
     entries: dict[str, str] = {}
     seen_transform_params: set[str] = set()
     for reg in spec.regressions:
-        if get_free_predictor_columns(reg):
+        free_cols = [c for c in get_free_predictor_columns(reg) if c not in coef_names]
+        if free_cols:
             entries[f"beta_{reg.lhs}"] = _entry(f"beta_{reg.lhs}", "Normal(0, 10)")
 
         family = families.get(reg.lhs, "gaussian")
@@ -578,6 +708,8 @@ def build_priors(
                 entries[f"sigma_{reg.lhs}"] = _entry(
                     f"sigma_{reg.lhs}", "HalfNormal(1)"
                 )
+            if reg.lhs in lag_base_vars:
+                entries[f"init_{reg.lhs}"] = _entry(f"init_{reg.lhs}", "Normal(0, 1)")
         else:
             if family not in ("bernoulli", "poisson", "negbinomial"):
                 entries[f"sigma_{reg.lhs}"] = _entry(
@@ -609,26 +741,49 @@ def build_priors(
                 )
                 entries[f"slope_{reg.lhs}_{svar}"] = "Normal(mu_slope, sigma_slope)"
         for term in reg.terms:
+            if term.categorical is not None:
+                beta_name = f"beta_{reg.lhs}_{term.variable}"
+                if term.categorical.prior == "hierarchical":
+                    entries[f"sigma_{beta_name}"] = _entry(
+                        f"sigma_{beta_name}", "HalfNormal(1)"
+                    )
+                    if has_population_mean(reg, term.categorical):
+                        entries[f"mu_{beta_name}"] = _entry(
+                            f"mu_{beta_name}", "Normal(0, 10)"
+                        )
+                        entries[beta_name] = (
+                            f"Normal(mu_{beta_name}, sigma_{beta_name})"
+                        )
+                    elif sums_to_zero(reg, term.categorical):
+                        entries[beta_name] = f"ZeroSumNormal(0, sigma_{beta_name})"
+                    else:
+                        entries[beta_name] = f"Normal(0, sigma_{beta_name})"
+                else:
+                    entries[beta_name] = _entry(beta_name, "Normal(0, 10)")
             if term.transform is not None:
                 _collect_transform_priors(
                     term.transform, entries, seen_transform_params, prior_config
                 )
-            if term.hsgp is not None:
-                var = term.hsgp.variable
-                entries[f"ell_{reg.lhs}_{var}"] = _entry(
-                    f"ell_{reg.lhs}_{var}", "InverseGamma(3, 1)"
-                )
-                entries[f"eta_{reg.lhs}_{var}"] = _entry(
-                    f"eta_{reg.lhs}_{var}", "HalfNormal(1)"
-                )
-                # beta_hsgp is only a tunable prior in the non-centered
-                # parametrization; in centered mode beta uses the data-derived
-                # sqrt_psd scale, so it is intentionally not listed to match
-                # what default_priors registers (tune ell/eta instead).
-                if not term.hsgp.centered:
-                    entries[f"beta_hsgp_{reg.lhs}_{var}"] = _entry(
-                        f"beta_hsgp_{reg.lhs}_{var}", "Normal(0, 1)"
-                    )
+            if term.basis is not None:
+                from pathmc.basis import get_basis
+
+                basis = get_basis(term.basis.name)
+                for name, description in basis.prior_descriptions(
+                    reg.lhs, term.basis
+                ).items():
+                    entries[name] = _entry(name, description)
+
+    # --- by_var structured pooling ---
+    for name, entry in by_var_entries.items():
+        if entry["kind"] == "coefficient":
+            key = str(entry["key"])
+            entries[f"mu_{name}_{key}"] = _entry(f"mu_{name}_{key}", "Normal(0, 10)")
+            entries[f"sigma_{name}_{key}"] = _entry(
+                f"sigma_{name}_{key}", "HalfNormal(1)"
+            )
+            entries[f"beta_{name}"] = f"Normal(mu_{name}_{key}, sigma_{name}_{key})"
+        elif entry["kind"] == "none_coefficient":
+            entries[f"beta_{name}"] = _entry(f"beta_{name}", "Normal(0, 10)")
 
     if spec.residual_covs:
         import networkx as nx

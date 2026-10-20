@@ -7,8 +7,14 @@ Remember, when running into bugs or complex issues, it is not impossible we are 
 ## Workflow
 
 1. Make your changes. Do not modify test files — if a test seems wrong, flag it for human review. Exceptions are for adding new tests or removing obsolete ones, but never for changing the expected behavior of existing tests.
-2. Run the relevant gate tests, e.g. `uv run pytest tests/test_<module>.py -x -v`. `make test-fast` skips MCMC sampling; `make test` runs everything.
+2. Run the relevant gate tests, e.g. `uv run pytest tests/test_<module>.py -x -v`. `make test-fast` skips slow MCMC tests and nightly Tier 5. `make test` runs the per-commit suite, including slow MCMC, and excludes nightly Tier 5.
 3. Run `make lint` before considering work done or committing. It runs `prek run --all-files` (ruff, ruff-format, mypy, YAML/TOML, license checks).
+
+For final validation, run `make check-pr PR=<number>` for an existing pull request, or `make check-merge BASE=main` before creating one. These check the current target branch merged with the committed candidate in a disposable worktree; checking the feature head alone does not reproduce GitHub's merge checkout. The command records the validated head/base/tree and rejects changes to those inputs during the run. See the validation section in `CONTRIBUTING.md` for pushed heads versus unpublished descendants.
+
+For `simulate()` and scaling, prefer tests that leave the module under test: hand-written NumPy oracles, or round-trips into a different entry point (`model()` on simulated frames, `do(raw)` vs `intercept + beta * raw/factor`). Simulate-and-recover alone is blind to silent DGP bugs because the same code generates and checks the data.
+
+Line-level AI attribution is recorded by [git-ai](https://usegitai.com/docs/get-started) into `refs/notes/ai`. It is optional and installed per machine, never per repo — see the "AI code attribution with git-ai" section of [CONTRIBUTING.md](CONTRIBUTING.md) for setup and the `allow_repositories` gotcha.
 
 ## Scratch space (`.scratch/`)
 
@@ -38,6 +44,7 @@ pathmc/
   falsify.py      # Whole-DAG falsification (permutation test)
   sensitivity.py  # Unmeasured-confounding sensitivity analysis
   panel.py        # PanelInfo and panel validation
+  scaling.py      # Scaling layer for heterogeneous units (Scaling, ScalingFactors)
   priors.py       # default_priors(), merge_priors(); Prior-based config
   residuals.py    # Residual covariance structures (LKJ Cholesky, pluggable)
   idata.py        # Internal ArviZ InferenceData accessors
@@ -55,14 +62,13 @@ This package targets **PyMC ≥ 6.0, ArviZ ≥ 1.1, PyTensor ≥ 3.0, and NumPy 
 
 The site is built with [Great Docs](https://posit-dev.github.io/great-docs/) via `great-docs.yml`: `uv run great-docs build`. The output dir `great-docs/_site/` is ephemeral and gitignored — never edit it. Edit sources instead: `docs/user_guide/*.qmd`, `docs/examples/**/*.qmd`, `great-docs.yml`, and `pathmc/skills/pathmc/SKILL.md`.
 
-Notebooks are frozen (`freeze: true`): the committed `_freeze/` cache supplies cell outputs and CI never spawns a kernel, so **local previews show the last-frozen output, not in-progress edits.** After editing an executable page, refresh and commit the cache (local freezing needs the kernel once: `uv run python -m ipykernel install --user --name pathmc`):
+Notebooks are frozen (`freeze: true`): the committed `_freeze/` cache supplies cell outputs and CI never spawns a kernel, so **local previews show the last-frozen output, not in-progress edits.** After editing an executable page, refresh and commit the cache:
 
 ```bash
-uv run great-docs freeze docs/examples/01-foundations/my_page.qmd
+make freeze-page PAGE=docs/examples/01-foundations/my_page.qmd
 git add _freeze/
 ```
 
-The repo-root symlink `examples -> docs/examples` is required by Great Docs Page Tags — do not delete it.
 
 ## Style
 
@@ -80,3 +86,21 @@ The repo-root symlink `examples -> docs/examples` is required by Great Docs Page
 - The do() planner (propagation order) is logically separate from the do() executor (applies posterior draws).
 - Residual covariance uses an abstraction layer, not hardcoded LKJ, so alternative structures can be added without major refactors.
 - Parameter naming is predictable and stable across runs, via ArviZ/xarray coords.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+`ready-for-agent`, `needs-human`, `needs developer attention`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
+
+### Autonomous workflows
+
+- **Bugs**: `fix-bug` skill — `fix bug #N`

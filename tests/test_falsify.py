@@ -507,20 +507,6 @@ class TestPartialCorrelationTester:
         assert p_dup is not None
         assert p_dup == pytest.approx(p_one)
 
-    def test_non_numeric_column_skipped(self):
-        rng = np.random.default_rng(7)
-        x = rng.normal(size=40)
-        df = pd.DataFrame({
-            "X": x,
-            "Y": 0.5 * x + rng.normal(scale=0.5, size=40),
-            "G": ["a", "b"] * 20,
-        })
-        tester = self._tester(df, variables=["X", "Y", "G"])
-        # Numeric pair still works; any test needing the string column skips.
-        assert tester.p_value("X", "Y", ()) is not None
-        assert tester.p_value("X", "G", ()) is None
-        assert tester.p_value("X", "Y", ("G",)) is None
-
     def test_perfect_collinearity_returns_zero(self):
         rng = np.random.default_rng(3)
         x = rng.normal(size=100)
@@ -995,6 +981,17 @@ class TestResidualCovariance:
         with pytest.raises(ValueError, match="residual covariance"):
             m.falsify(random_seed=0)
 
+    def test_three_variable_residual_block_rejected(self, confounded_data):
+        # A chain of `~~` terms (X ~~ Y, Y ~~ Z) forms one three-variable
+        # block. Covered only transitively elsewhere; pin it explicitly.
+        df = confounded_data.assign(Z=confounded_data["Y"] * 0.5)
+        with pytest.raises(ValueError, match="residual covariance"):
+            falsify_graph(
+                build_graph(parse_spec("W ~ X + Y + Z\nX ~~ Y\nY ~~ Z")),
+                _to_nw(df),
+                random_seed=0,
+            )
+
     def test_dangling_residual_endpoint_rejected(self):
         # Y appears only in a ~~ term (not a DAG node): must raise cleanly,
         # not KeyError.
@@ -1088,13 +1085,41 @@ class TestSignificanceLevelCapping:
 
 
 class TestPlotValidation:
-    def test_negative_bins_rejected(self):
+    @pytest.fixture
+    def result(self):
         import matplotlib
 
         matplotlib.use("Agg")
-        r = TestResultDisplay()._make(p_lmc=0.5, p_tpa=0.0, n_in_mec=0)
-        with pytest.raises(ValueError, match="bins"):
-            r.plot(bins=0)
+        return TestResultDisplay()._make(p_lmc=0.5, p_tpa=0.0, n_in_mec=0)
+
+    @pytest.mark.parametrize("bins", [-1, 0])
+    def test_non_positive_bin_count_rejected(self, result, bins):
+        with pytest.raises(
+            ValueError, match=rf"^bins must be a positive integer, got {bins}\.$"
+        ):
+            result.plot(bins=bins)
+
+    @pytest.mark.parametrize("bins", [2.5, True, {1, 2}])
+    def test_invalid_bins_type_rejected(self, result, bins):
+        # bool subclasses int, so it needs an explicit reject.
+        with pytest.raises(
+            ValueError,
+            match=r"^bins must be a positive integer, a binning strategy name, "
+            r"a sequence of bin edges, or None, got ",
+        ):
+            result.plot(bins=bins)
+
+    @pytest.mark.parametrize("bins", [None, 10, np.int64(10)])
+    def test_bin_count_accepted(self, result, bins):
+        assert result.plot(bins=bins) is not None
+
+    @pytest.mark.parametrize("bins", ["auto", "sturges", [0.0, 0.5, 1.0], (0.0, 1.0)])
+    def test_strategy_and_edges_delegated_to_matplotlib(self, result, bins):
+        assert result.plot(bins=bins) is not None
+
+    def test_invalid_strategy_name_reported_by_matplotlib(self, result):
+        with pytest.raises(ValueError, match="not a valid estimator"):
+            result.plot(bins="nonsense")
 
 
 class TestMiscEdgeCases:

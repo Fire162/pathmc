@@ -141,7 +141,7 @@ model.equations()
 ```
 
 ```{python}
-model.fit(draws=500, tune=500, chains=4, random_seed=42)
+model.fit(random_seed=42)
 ```
 
 ```{python}
@@ -220,7 +220,7 @@ df_rand = pd.DataFrame({"X": X_rand, "Y": Y_rand})
 
 ```{python}
 model_rand = pathmc.model("Y ~ X", data=df_rand)
-model_rand.fit(draws=500, tune=500, chains=4, random_seed=42)
+model_rand.fit(random_seed=42)
 ```
 
 Without confounding, the regression slope of Y on X — the "seeing" estimate — should match the do-operator ATE. Both should recover the true causal effect.
@@ -437,7 +437,7 @@ Because `X` positively affects both treatment probability and the treatment effe
 
 ```{python}
 model_att = pathmc.model("Y ~ T + X + T:X", data=df_att)
-model_att.fit(draws=500, tune=500, chains=4, random_seed=42)
+model_att.fit(random_seed=42)
 ```
 
 ```{python}
@@ -465,7 +465,7 @@ In a linear model without interactions, all three are equal. They diverge when t
 
 `do()` assumes the DAG is correctly specified and all confounders are measured. If there is an unobserved common cause of `X` and `Y` that is not in the model, the `do()` result will still be biased — the method computes the *mechanical consequence* of the intervention under the given model, not ground truth.
 
-Always pair `do()` with careful thinking about your causal assumptions. See [Causal Identification](/examples/03-identification/causal_identification.qmd) for how to verify that your model identifies the effect you want, including what to do when confounders are unobserved.
+Always pair `do()` with careful thinking about your causal assumptions. See [Causal Identification](../identification/causal_identification.qmd) for how to verify that your model identifies the effect you want, including what to do when confounders are unobserved.
 
 ## Summary
 

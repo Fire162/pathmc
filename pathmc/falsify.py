@@ -46,6 +46,7 @@ https://arxiv.org/abs/2305.09565
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from itertools import permutations
 from typing import TYPE_CHECKING
@@ -287,7 +288,7 @@ class FalsificationResult(ResultReprMixin):
     def plot(
         self,
         ax: matplotlib.axes.Axes | None = None,
-        bins: int | None = None,
+        bins: int | str | Sequence[float] | np.ndarray | None = None,
     ) -> matplotlib.figure.Figure:
         """Plot histograms of permuted-baseline violation fractions.
 
@@ -300,8 +301,11 @@ class FalsificationResult(ResultReprMixin):
         ----------
         ax : matplotlib.axes.Axes | None
             Axes to plot on. Creates a new figure if ``None``.
-        bins : int | None
-            Number of histogram bins. Defaults to an automatic choice.
+        bins : int | str | Sequence[float] | numpy.ndarray | None
+            Passed through to ``matplotlib.axes.Axes.hist``: a positive
+            integer bin count, a binning strategy name such as
+            ``"auto"``, or a sequence of bin edges. Defaults to an
+            automatic choice.
 
         Returns
         -------
@@ -312,6 +316,10 @@ class FalsificationResult(ResultReprMixin):
         ------
         RuntimeError
             If the result cannot be evaluated (no LMC tests).
+        ValueError
+            If *bins* is neither one of the accepted types nor, for an
+            integer bin count, positive. Strategy names and bin edges are
+            validated by matplotlib, which reports them more precisely.
         """
         import matplotlib.pyplot as plt
 
@@ -321,8 +329,19 @@ class FalsificationResult(ResultReprMixin):
                 "The DAG implies no testable conditional independences."
             )
 
-        if bins is not None and bins < 1:
-            raise ValueError(f"bins must be a positive integer or None, got {bins}.")
+        # Only the bin count is validated. A strategy name or an edge
+        # sequence is left to matplotlib, which reports both more precisely.
+        if bins is not None:
+            if isinstance(bins, bool) or not isinstance(
+                bins, (int, np.integer, Sequence, np.ndarray)
+            ):
+                raise ValueError(
+                    f"bins must be a positive integer, a binning strategy "
+                    f"name, a sequence of bin edges, or None, got {bins!r} "
+                    f"of type {type(bins).__name__}."
+                )
+            if isinstance(bins, (int, np.integer)) and bins < 1:
+                raise ValueError(f"bins must be a positive integer, got {bins}.")
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(8, 4))
@@ -333,7 +352,7 @@ class FalsificationResult(ResultReprMixin):
 
         ax.hist(
             [self.perm_lmc_violation_fractions, self.perm_tpa_violation_fractions],
-            bins=bins,
+            bins=bins.tolist() if isinstance(bins, np.ndarray) else bins,
             alpha=0.5,
             color=["tab:blue", "tab:orange"],
             edgecolor="k",
@@ -486,6 +505,7 @@ def falsify_graph(
     significance_ci: float = 0.05,
     include_unconditional: bool = True,
     random_seed: int | None = None,
+    categorical_vars: Iterable[str] | None = None,
 ) -> FalsificationResult:
     """Falsify a whole DAG against data via a node-permutation test.
 
@@ -515,9 +535,11 @@ def falsify_graph(
         cross-sectional (observed-variable) structure. Residual
         covariances (``~~``) are not supported and raise ``ValueError``.
     data : nw.DataFrame
-        Observed data. Variables without a usable numeric column (latent
-        nodes, or non-numeric columns) are skipped in CI tests but still
-        participate in the d-separation oracle and node permutations.
+        Observed data. Categorical columns (string, pandas categorical, or
+        named in *categorical_vars*) enter the CI tests as indicator
+        blocks. Variables without a data column (latent nodes) are skipped
+        in CI tests but still participate in the d-separation oracle and
+        node permutations.
     n_permutations : int | None
         Number of permuted DAGs in the baseline. Defaults to
         ``round(1 / significance_level)`` (20 at the default level). For
@@ -535,6 +557,9 @@ def falsify_graph(
         root nodes (default ``True``).
     random_seed : int | None
         Seed for the permutation sampler, for reproducible results.
+    categorical_vars : Iterable[str] | None
+        Variables to dummy-encode even though their column is numeric
+        (integer-coded labels declared with ``C()``).
 
     Returns
     -------
@@ -607,7 +632,7 @@ def falsify_graph(
 
     nodes = sorted(dag.nodes)
     rng = np.random.default_rng(random_seed)
-    tester = _PartialCorrelationTester(data, nodes)
+    tester = _PartialCorrelationTester(data, nodes, categorical_vars)
 
     given_n_tests, given_violations, local = _validate_lmc(
         dag, tester, significance_ci, include_unconditional

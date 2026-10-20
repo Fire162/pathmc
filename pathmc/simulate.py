@@ -25,8 +25,11 @@ handles temporal propagation natively.
 
 from __future__ import annotations
 
+import builtins
 import warnings
-from typing import Any
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, cast
 
 import narwhals.stable.v1 as nw
 import numpy as np
@@ -37,15 +40,99 @@ import xarray as xr
 from pytensor.graph.replace import graph_replace
 from pytensor.graph.traversal import ancestors
 
+from pathmc.compile import MuSpec, PredictorSlot, build_mu, build_mu_specs
 from pathmc.graph import GraphInfo
+from pathmc.parse import Spec
 from pathmc.idata import DEFAULT_HDI_PROB
 from pathmc.idata import hdi as compute_hdi
 from pathmc.idata import hdi_label
 from pathmc.idata import posterior
 from pathmc.panel import PanelInfo
 from pathmc.reprs import ReprSpec, ResultReprMixin
+from pathmc.scaling import ScaleContext, ScalingFactors
+
+if TYPE_CHECKING:
+    import matplotlib.axes
+    import matplotlib.figure
 
 __all__ = ["DoResult", "EstimandResult"]
+
+
+#: pm.Data flag on scan-compiled panel models. Mirrors
+#: ``pathmc._model._OBSERVED_CARRY_FLAG``; kept as a separate literal here
+#: (rather than importing from ``pathmc._model``) to avoid a circular import,
+#: since ``_model.py`` imports this module.
+_OBSERVED_CARRY_FLAG = "_use_observed_carry"
+
+
+@contextmanager
+def _scan_do_intervention(
+    model: pm.Model, updates: Mapping[str, np.ndarray]
+) -> Iterator[None]:
+    """Temporarily set the scan's per-var do()-intervention override Data.
+
+    ``updates`` maps ``_do_intervene_{var}`` node names (see
+    ``compile.py::_compile_scan_panel``) to the ``(n_times, n_units)``
+    intervention array. Restores the previous value (all-NaN in the common
+    case) on exit so a reused generative model is left clean for the next
+    call. A no-op when ``updates`` is empty or the model predates this
+    channel (cross-sectional / no endogenous intervention requested).
+    """
+    if not updates:
+        yield
+        return
+    # ``pm.set_data`` runs values through ``convert_observed_data``, which
+    # auto-converts NaN-containing arrays to a ``numpy.ma.MaskedArray`` (the
+    # observed-data missing-value convention) -- exactly the wrong thing for
+    # this NaN-as-sentinel channel, and unsupported by the numba backend
+    # ``compute_deterministics``/``sample_posterior_predictive`` may pick.
+    # Set the underlying shared variable directly instead.
+    shared_vars = {name: model[name] for name in updates}
+    previous = {name: var.get_value() for name, var in shared_vars.items()}
+    for name, var in shared_vars.items():
+        var.set_value(updates[name])
+    try:
+        yield
+    finally:
+        for name, var in shared_vars.items():
+            var.set_value(previous[name])
+
+
+@contextmanager
+def _forced_generative_carry(model: pm.Model) -> Iterator[None]:
+    """Force the observed-carry flag off for the duration of the block.
+
+    ``do()`` must always forward-simulate using the model's own propagated
+    values -- never conditioning on observed data, which is what
+    ``predict(one_step_ahead=True)`` is for. Interventional queries that
+    silently fell back to observed carries would mix "what actually
+    happened" into "what would happen under this intervention".
+
+    The flag defaults to 0 on a freshly compiled generative model and stays
+    there in the common case (``fit()``/``predict()`` operate on a separate
+    ``pm.observe()`` clone), but nothing previously *forced* it for ``do()``.
+    That made correctness depend on an implicit invariant rather than an
+    explicit one -- e.g. it silently breaks for models with no non-latent
+    observed vars, where the generative and observation models are the same
+    object. Forcing (and restoring) the flag here, exactly like
+    ``pathmc._model._observed_carry`` does for ``predict()``, removes that
+    dependency. A no-op on models without the flag (anything but a
+    scan-compiled panel model with a lagged endogenous term).
+
+    The cross-sectional call sites retain this guard defensively; current
+    scan-compiled models are dispatched to ``run_do_panel_unified`` instead.
+    """
+    if _OBSERVED_CARRY_FLAG not in model.named_vars:
+        yield
+        return
+
+    flag = model[_OBSERVED_CARRY_FLAG]
+    previous = flag.get_value()
+    flag.set_value(np.array(0, dtype="int8"))
+    try:
+        yield
+    finally:
+        flag.set_value(previous)
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +189,47 @@ def _chain_draw_ones(post: xr.Dataset) -> xr.DataArray:
     output Dataset without any manual coordinate bookkeeping.
     """
     return xr.ones_like(post["chain"] * post["draw"], dtype=float)
+
+
+def _to_business_units(
+    var: str,
+    da: xr.DataArray,
+    data: nw.DataFrame | None,
+    scaling_factors: ScalingFactors | None,
+    scan_info: Any | None = None,
+) -> xr.DataArray:
+    """Map internal-scale draws for *var* to business units."""
+    if scaling_factors is None:
+        return da
+    if data is None:
+        raise ValueError(
+            "scaling_factors requires data= so per-row divisors can be aligned."
+        )
+    return scaling_factors.to_business(
+        da,
+        kind="outcome",
+        dims=ScaleContext(
+            term=var,
+            data=data,
+            scan_info=scan_info,
+            scalar="mean",
+        ),
+    )
+
+
+def _unscale_do_dataset(
+    ds: xr.Dataset,
+    data: nw.DataFrame,
+    scaling_factors: ScalingFactors | None,
+) -> xr.Dataset:
+    """Return *ds* with scaled endogenous variables in business units."""
+    if scaling_factors is None:
+        return ds
+    return scaling_factors.to_business(
+        ds,
+        kind="outcome",
+        dims=ScaleContext(data=data, scalar="mean"),
+    )
 
 
 def _spread_over_time(
@@ -249,10 +377,41 @@ class DoResult(_DrawStorageMixin, ResultReprMixin):
     ds : xr.Dataset
         Labelled posterior draws with dims ``("chain", "draw")`` and,
         optionally, ``"unit"`` or ``"time"``.
+    scenario : str
+        Result origin. Internal metadata prevents contrasts between
+        population-level and unit-level counterfactual simulations.
+    evidence : Mapping[str, float] | None
+        Individual evidence associated with a counterfactual result.
+    observed_by_time : Mapping[str, np.ndarray] | None
+        Unit-mean observed series per variable, aligned to :attr:`time_index`.
     """
 
-    def __init__(self, *, ds: xr.Dataset) -> None:
+    def __init__(
+        self,
+        *,
+        ds: xr.Dataset,
+        scenario: str = "do",
+        evidence: Mapping[str, float] | None = None,
+        observed_by_time: Mapping[str, np.ndarray] | None = None,
+    ) -> None:
         self._ds = ds
+        self._scenario = scenario
+        self._evidence = dict(evidence) if evidence is not None else None
+        self._observed_by_time = (
+            {k: np.asarray(v, dtype=float) for k, v in observed_by_time.items()}
+            if observed_by_time is not None
+            else {}
+        )
+
+    @property
+    def dataset(self) -> xr.Dataset:
+        """Labeled posterior draws as an :class:`xarray.Dataset`.
+
+        Cross-sectional results use dims ``("chain", "draw")``; panel
+        ``do(simulate_over="time")`` results add ``"time"``. For a flat
+        ``(n_samples,)`` numpy view, use :meth:`draws`.
+        """
+        return self._ds
 
     def draws(self, var: str) -> np.ndarray:
         """Return raw posterior draws for *var* under this intervention.
@@ -313,10 +472,142 @@ class DoResult(_DrawStorageMixin, ResultReprMixin):
         """
         return self._by_time_draws(var)
 
+    def plot(
+        self,
+        var: str,
+        *,
+        vs: str | None = None,
+        observed: np.ndarray | None = None,
+        ax: matplotlib.axes.Axes | None = None,
+        prob: float = DEFAULT_HDI_PROB,
+    ) -> matplotlib.figure.Figure:
+        """Plot a per-time trajectory with an HDI band.
+
+        For panel ``do(simulate_over="time")`` results, draws the posterior
+        mean over :attr:`time_index` with a shaded HDI band. Optionally overlays
+        an observed series when ``vs="observed"`` or ``observed=`` is passed.
+
+        Parameters
+        ----------
+        var : str
+            Variable to plot.
+        vs : str | None
+            When ``"observed"``, overlay the unit-mean observed series attached
+            at construction or supplied via ``observed=``.
+        observed : np.ndarray | None
+            Optional length-``n_times`` observed series; overrides attached
+            metadata for the overlay.
+        ax : matplotlib.axes.Axes | None
+            Axes to plot on. Creates a new figure if ``None``.
+        prob : float
+            Probability mass of the HDI band (default 0.94).
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The figure containing the trajectory plot.
+
+        Raises
+        ------
+        KeyError
+            If *var* is not stored on this result.
+        ValueError
+            If per-time data is unavailable (cross-sectional result), if
+            ``vs="observed"`` is requested without a series, or if
+            ``observed`` has the wrong length.
+        """
+        import matplotlib.pyplot as plt
+
+        if var not in self._ds.data_vars:
+            available = sorted(str(v) for v in self._ds.data_vars)
+            raise KeyError(
+                f"Unknown variable '{var}'. Available variables: {available}"
+            )
+        no_time_data = (
+            not _has_by_time(self._ds)
+            or "time" not in self._ds[var].dims
+            or self._time_index is None
+        )
+        if no_time_data:
+            raise ValueError(
+                "DoResult.plot() requires per-time panel data. "
+                "Use do(simulate_over='time') for trajectory plots, or "
+                "DoResult.plot_dist() for cross-sectional marginal posteriors."
+            )
+
+        time_coords = self._time_index
+        assert time_coords is not None
+
+        draws = self._by_time_draws(var)
+        n_times = draws.shape[0]
+        means = np.mean(draws, axis=1)
+        hdi_band = compute_hdi(draws, prob=prob)
+        if hdi_band.ndim == 1 and hdi_band.shape[0] == 2:
+            lo = np.full(n_times, float(hdi_band[0]))
+            hi = np.full(n_times, float(hdi_band[1]))
+        else:
+            lo = hdi_band[:, 0]
+            hi = hdi_band[:, 1]
+
+        overlay: np.ndarray | None = None
+        if observed is not None:
+            overlay = np.asarray(observed, dtype=float)
+        elif vs == "observed":
+            overlay = self._observed_by_time.get(var)
+            if overlay is None:
+                raise ValueError(
+                    f"No observed series available for '{var}'. Pass observed= "
+                    f"with a length-{n_times} array of unit-mean values."
+                )
+        elif vs is not None:
+            raise ValueError(
+                f"Unknown vs='{vs}'. Supported values: 'observed' or omit vs."
+            )
+
+        if overlay is not None:
+            if overlay.shape[0] != n_times:
+                raise ValueError(
+                    f"observed must have length {n_times} (one per time step), "
+                    f"got {overlay.shape[0]}."
+                )
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(8, 4))
+        else:
+            fig = cast("matplotlib.figure.Figure", ax.get_figure())
+
+        x = np.arange(n_times)
+        ax.fill_between(x, lo, hi, alpha=0.3, label=hdi_label(prob))
+        ax.plot(x, means, color="C0", label="Counterfactual")
+        if overlay is not None:
+            ax.plot(x, overlay, color="C1", linestyle="--", label="Observed")
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(t) for t in time_coords], rotation=45, ha="right")
+        ax.set_xlabel("time")
+        ax.set_ylabel(var)
+        ax.legend(loc="best")
+        ax.set_title(var)
+        fig.tight_layout()
+        return fig
+
     def __sub__(self, other: DoResult) -> DoResult:
         """Element-wise contrast between two DoResults."""
+        if self._scenario != other._scenario:
+            raise ValueError(
+                "Cannot contrast a counterfactual result with a do() result. "
+                "Compare two do() scenarios or two counterfactual scenarios instead."
+            )
+        if self._scenario == "counterfactual" and self._evidence != other._evidence:
+            raise ValueError(
+                "Counterfactual contrasts require identical evidence for the "
+                "same individual."
+            )
         common = [str(v) for v in self._ds.data_vars if v in other._ds.data_vars]
-        return DoResult(ds=self._ds[common] - other._ds[common])
+        return DoResult(
+            ds=self._ds[common] - other._ds[common],
+            scenario=self._scenario,
+            evidence=self._evidence,
+        )
 
     def _repr_compact(self) -> str:
         if not self._ds.data_vars:
@@ -342,7 +633,7 @@ class DoResult(_DrawStorageMixin, ResultReprMixin):
             title=f"DoResult — {n_samples} draws, {n_vars} variables",
             rows=rows,
             columns=["variable", "mean", hdi_label()],
-            footer="Methods: .draws() .mean() .hdi() .by_time() .dataset",
+            footer="Methods: .draws() .mean() .hdi() .by_time() .plot() .dataset",
         )
 
 
@@ -371,6 +662,14 @@ class EstimandResult(_DrawStorageMixin, ResultReprMixin):
         The treatment variable that was intervened on.
     estimand : str
         Estimand label, e.g. ``"ATE"``, ``"CATE"``, ``"ATT"``, ``"ATU"``.
+    estimator : str
+        Estimator label, e.g. ``"structural"`` or ``"regression_adjustment"``.
+    causal : bool
+        Whether the estimand is causal.
+    interventional : bool
+        Whether the estimand is interventional.
+    identifiable : bool | None
+        Whether the effect was identifiable; ``None`` when unknown.
     """
 
     def __init__(
@@ -380,11 +679,25 @@ class EstimandResult(_DrawStorageMixin, ResultReprMixin):
         outcome: str,
         treatment: str,
         estimand: str,
+        estimator: str = "structural",
+        causal: bool = True,
+        interventional: bool = True,
+        identifiable: bool | None = None,
     ) -> None:
         self._ds = ds
         self._default_var = outcome
         self._treatment = treatment
         self._estimand = estimand
+        self._estimator = estimator
+        self._causal = causal
+        self._interventional = interventional
+        self._identifiable = identifiable
+        self._ds.attrs.update({
+            "estimator": estimator,
+            "causal": causal,
+            "interventional": interventional,
+            "identifiable": identifiable,
+        })
 
     @classmethod
     def from_contrast(
@@ -393,6 +706,10 @@ class EstimandResult(_DrawStorageMixin, ResultReprMixin):
         outcome: str,
         treatment: str,
         estimand: str,
+        estimator: str = "structural",
+        causal: bool = True,
+        interventional: bool = True,
+        identifiable: bool | None = None,
     ) -> EstimandResult:
         """Wrap a :class:`DoResult` contrast as a focused estimand result."""
         return cls(
@@ -400,6 +717,10 @@ class EstimandResult(_DrawStorageMixin, ResultReprMixin):
             outcome=outcome,
             treatment=treatment,
             estimand=estimand,
+            estimator=estimator,
+            causal=causal,
+            interventional=interventional,
+            identifiable=identifiable,
         )
 
     @property
@@ -411,6 +732,35 @@ class EstimandResult(_DrawStorageMixin, ResultReprMixin):
     def treatment(self) -> str:
         """The treatment variable that was intervened on."""
         return self._treatment
+
+    @property
+    def estimator(self) -> str:
+        """Estimator label (e.g. ``"structural"``, ``"regression_adjustment"``)."""
+        return self._estimator
+
+    @property
+    def causal(self) -> bool:
+        """Whether this estimand is causal."""
+        return self._causal
+
+    @property
+    def interventional(self) -> bool:
+        """Whether graph surgery / ``do()`` was used."""
+        return self._interventional
+
+    @property
+    def identifiable(self) -> bool | None:
+        """Whether the effect was identifiable; ``None`` when unknown."""
+        return self._identifiable
+
+    @property
+    def dataset(self) -> xr.Dataset:
+        """Labeled contrast draws as an :class:`xarray.Dataset`.
+
+        Dims are ``("chain", "draw")``, plus ``"time"`` for panel estimands.
+        For a flat ``(n_samples,)`` numpy view, use :meth:`draws`.
+        """
+        return self._ds
 
     def _resolve(self, var: str | None) -> str:
         key = self._default_var if var is None else var
@@ -551,6 +901,10 @@ class EstimandResult(_DrawStorageMixin, ResultReprMixin):
             outcome=self._default_var,
             treatment=self._treatment,
             estimand=self._estimand,
+            estimator=self._estimator,
+            causal=self._causal,
+            interventional=self._interventional,
+            identifiable=self._identifiable,
         )
 
     def _repr_compact(self) -> str:
@@ -628,6 +982,294 @@ def _float_descendants_of(source_var: Any, exprs: list[Any]) -> list[Any]:
     return descendants
 
 
+def _slot_column_value(
+    slot: PredictorSlot,
+    values: Mapping[str, float | np.ndarray],
+) -> float | np.ndarray:
+    """Evaluate one design-matrix column from a value mapping."""
+    if slot.kind == "intercept":
+        return 1.0
+    if slot.kind == "interaction":
+        assert slot.interaction_parts is not None
+        product = np.asarray(1.0, dtype=float)
+        for part in slot.interaction_parts:
+            if "(" in part:
+                raise NotImplementedError(
+                    "counterfactual() does not yet support transformed or lagged "
+                    f"interaction terms ('{slot.name}')."
+                )
+            val = values[part]
+            product = product * np.asarray(val, dtype=float)
+        if product.ndim == 0:
+            return float(product)
+        return product
+    if slot.kind in ("lag", "transform"):
+        raise NotImplementedError(
+            f"counterfactual() does not yet support {slot.kind} terms "
+            f"('{slot.name}'). Use a cross-sectional model without transforms "
+            f"or lags."
+        )
+    if slot.kind == "plain":
+        val = values[slot.name]
+        if isinstance(val, np.ndarray):
+            return val.astype(float)
+        return float(val)
+    raise NotImplementedError(
+        f"counterfactual() does not support predictor kind '{slot.kind}'. "
+        "Use a model with supported linear predictor terms."
+    )
+
+
+def _categorical_contribution(
+    slot: PredictorSlot,
+    lhs: str,
+    post: xr.Dataset,
+    values: Mapping[str, Any],
+) -> np.ndarray:
+    """Posterior draws of one categorical term's contribution for one unit."""
+    from pathmc.categorical import contrast_indices, encode_categorical
+
+    assert slot.categorical is not None
+    dim = f"{lhs}_{slot.name}_levels"
+    beta = (
+        post[f"beta_{lhs}_{slot.name}"]
+        .transpose(dim, "chain", "draw")
+        .values.reshape(post.sizes[dim], -1)
+    )
+    row = encode_categorical(slot.categorical, [values[slot.name]], variable=slot.name)
+    return (row @ beta[contrast_indices(slot.categorical)])[0]
+
+
+def _linear_predictor_draws(
+    mu_spec: MuSpec,
+    idata: xr.DataTree,
+    values: Mapping[str, Any],
+) -> np.ndarray:
+    """Posterior draws of the linear predictor for one equation."""
+    post = posterior(idata)
+    n_draws = post.sizes["chain"] * post.sizes["draw"]
+    beta: np.ndarray | None = None
+    if any(slot.coeff_type == "free" for slot in mu_spec.slots):
+        coord_name = f"{mu_spec.lhs}_predictors"
+        beta = (
+            post[f"beta_{mu_spec.lhs}"]
+            .transpose(coord_name, "chain", "draw")
+            .values.reshape(-1, n_draws)
+        )
+
+    def resolve(slot: PredictorSlot) -> Any:
+        if slot.kind == "categorical":
+            return _categorical_contribution(slot, mu_spec.lhs, post, values)
+        return _slot_column_value(slot, values)
+
+    return np.asarray(build_mu(mu_spec, resolve, beta, np.zeros(n_draws, dtype=float)))
+
+
+def _validate_counterfactual_values(
+    values: Mapping[str, Any],
+    name: str,
+    categorical_levels: Mapping[str, tuple[Any, ...]],
+) -> dict[str, Any]:
+    """Return validated scalar counterfactual inputs with descriptive errors.
+
+    Numeric variables must be finite scalars; a categorical variable must be
+    one of its fitted level labels.
+    """
+    result: dict[str, Any] = {}
+    for var, value in values.items():
+        if not isinstance(var, str):
+            raise ValueError(f"{name} keys must be variable names, not {var!r}.")
+        array = np.asarray(value)
+        if var in categorical_levels:
+            levels = categorical_levels[var]
+            if array.ndim != 0 or value not in levels:
+                raise ValueError(
+                    f"{name} value for categorical '{var}' must be one fitted "
+                    f"level label, not {value!r}. Fitted levels are "
+                    f"{list(levels)!r}."
+                )
+            result[var] = value
+            continue
+        if array.ndim != 0 or isinstance(value, (bool, np.bool_)):
+            raise ValueError(
+                f"{name} value for '{var}' must be one finite scalar, not {value!r}."
+            )
+        try:
+            numeric = float(array)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"{name} value for '{var}' must be a number, not {value!r}. "
+                "Labels are accepted only for categorical predictors."
+            ) from None
+        if not np.isfinite(numeric):
+            raise ValueError(f"{name} value for '{var}' must be finite, not {value!r}.")
+        result[var] = numeric
+    return result
+
+
+def run_counterfactual(
+    spec: Spec,
+    graph_info: GraphInfo,
+    idata: xr.DataTree,
+    evidence: dict[str, Any],
+    do: dict[str, Any],
+    families: dict[str, str] | None = None,
+    allow_partial_evidence: bool = False,
+) -> DoResult:
+    """Three-step counterfactual using posterior draws.
+
+    Implements Pearl's abduction → action → prediction procedure for
+    linear Gaussian structural models. Categorical predictors are exogenous
+    labels, not structural nodes: they are partitioned into a label map
+    once, validated against fitted levels, and supplied to the linear
+    predictor as constants. They have no structural noise to abduct and
+    are not reported in the result.
+    """
+    from pathmc.categorical import categorical_terms
+
+    if families is None:
+        families = {}
+    label_levels = {call.variable: call.levels for _, call in categorical_terms(spec)}
+    structural = [
+        var for var in graph_info.topological_order if var not in label_levels
+    ]
+    evidence = _validate_counterfactual_values(evidence, "evidence", label_levels)
+    do = _validate_counterfactual_values(do, "do", label_levels)
+    if not do:
+        raise ValueError(
+            "do must contain at least one intervention. "
+            "Pass do={'var': value} for the counterfactual scenario."
+        )
+
+    model_vars = set(graph_info.topological_order)
+    unknown_evidence = set(evidence) - model_vars
+    if unknown_evidence:
+        sorted_unknown = ", ".join(f"'{v}'" for v in sorted(unknown_evidence))
+        raise ValueError(
+            f"Unknown variable(s) in evidence: {sorted_unknown}. "
+            f"Available variables: {sorted(model_vars)}."
+        )
+    unknown_do = set(do) - model_vars
+    if unknown_do:
+        sorted_unknown = ", ".join(f"'{v}'" for v in sorted(unknown_do))
+        raise ValueError(
+            f"Unknown variable(s) in do: {sorted_unknown}. "
+            f"Available variables: {sorted(model_vars)}."
+        )
+
+    non_gaussian = sorted(
+        var
+        for var in graph_info.endogenous
+        if families.get(var, "gaussian") not in ("gaussian", "")
+    )
+    if non_gaussian:
+        vars_str = ", ".join(f"'{v}'" for v in non_gaussian)
+        raise ValueError(
+            f"counterfactual() currently supports Gaussian models only; "
+            f"{vars_str} use non-Gaussian families. Algebraic abduction is "
+            f"not yet available for those distributions."
+        )
+
+    mu_specs = build_mu_specs(spec)
+    unsupported_slots = {
+        slot.kind
+        for mu_spec in mu_specs.values()
+        for slot in mu_spec.slots
+        if slot.kind in ("lag", "transform")
+    }
+    if unsupported_slots:
+        kinds = ", ".join(sorted(unsupported_slots))
+        raise NotImplementedError(
+            f"counterfactual() does not yet support {kinds} predictor terms. "
+            "Use a cross-sectional model without transforms or lags."
+        )
+
+    missing_evidence = model_vars - set(evidence)
+    if missing_evidence and not allow_partial_evidence:
+        missing_str = ", ".join(f"'{v}'" for v in sorted(missing_evidence))
+        raise ValueError(
+            f"evidence must include every model variable; missing {missing_str}. "
+            "Pass allow_partial_evidence=True to use population means (U = 0) "
+            "for missing variables."
+        )
+    missing_labels = sorted(missing_evidence & set(label_levels))
+    if missing_labels:
+        missing_str = ", ".join(f"'{v}'" for v in missing_labels)
+        raise ValueError(
+            f"evidence must include a level label for categorical predictor(s) "
+            f"{missing_str}: a label has no population mean to fall back on, "
+            "so allow_partial_evidence=True cannot fill it in."
+        )
+    if missing_evidence:
+        missing_str = ", ".join(f"'{v}'" for v in sorted(missing_evidence))
+        warnings.warn(
+            f"evidence does not include {missing_str}. Missing variables are "
+            "treated as population means (U = 0), mixing individual and "
+            "population information for every counterfactual outcome.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+    post = posterior(idata)
+    n_chains = post.sizes["chain"]
+    n_draws_per_chain = post.sizes["draw"]
+    n_draws = n_chains * n_draws_per_chain
+
+    # Labels are constants. Structural nodes are the only ones with noise,
+    # so abduction, prediction, and the reported dataset walk that list once.
+    factual_labels = {var: evidence[var] for var in label_levels if var in evidence}
+    action_labels = {
+        var: do[var] if var in do else factual_labels[var]
+        for var in label_levels
+        if var in do or var in factual_labels
+    }
+    factual_structural = {
+        var: evidence[var] if var in evidence else 0.0 for var in structural
+    }
+    abduction_values = {**factual_labels, **factual_structural}
+
+    u_values: dict[str, np.ndarray] = {}
+    for var in structural:
+        if var in graph_info.exogenous:
+            u_values[var] = np.full(n_draws, factual_structural[var])
+            continue
+        if var not in evidence:
+            u_values[var] = np.zeros(n_draws)
+            continue
+        if var not in mu_specs:
+            u_values[var] = np.zeros(n_draws)
+            continue
+        lp = _linear_predictor_draws(mu_specs[var], idata, abduction_values)
+        u_values[var] = evidence[var] - lp
+
+    predicted: dict[str, Any] = {}
+    for var in structural:
+        if var in do:
+            predicted[var] = np.full(n_draws, do[var])
+            continue
+        if var in graph_info.exogenous:
+            predicted[var] = np.full(n_draws, factual_structural[var])
+            continue
+        pred_inputs = {**action_labels, **predicted}
+        lp = _linear_predictor_draws(mu_specs[var], idata, pred_inputs)
+        predicted[var] = lp + u_values[var]
+
+    data_vars: dict[str, xr.DataArray] = {}
+    ones = _chain_draw_ones(post)
+    for var in structural:
+        arr = predicted.get(var, u_values.get(var, np.zeros(n_draws)))
+        arr_2d = np.asarray(arr, dtype=float).reshape(n_chains, n_draws_per_chain)
+        data_vars[var] = xr.DataArray(
+            arr_2d, dims=("chain", "draw"), coords=ones.coords
+        )
+
+    return DoResult(
+        ds=xr.Dataset(data_vars),
+        scenario="counterfactual",
+        evidence=evidence,
+    )
+
+
 def _exogenous_fill(values: np.ndarray) -> float:
     """Mean used to fill an exogenous variable for empirical integration.
 
@@ -643,16 +1285,100 @@ def _exogenous_fill(values: np.ndarray) -> float:
     return float(np.nanmean(arr))
 
 
-def _exog_value(
-    var: str, data: nw.DataFrame, subgroup_indices: np.ndarray | None
+def _intervention_array(val: float | np.ndarray, n: int) -> np.ndarray:
+    """Broadcast a scalar or length-*n* vector to per-row intervention values."""
+    arr = np.asarray(val)
+    if arr.ndim == 0:
+        return np.full(n, float(arr))
+    flat = arr.reshape(-1)
+    if flat.shape[0] == n:
+        return flat.astype(float, copy=False)
+    if flat.shape[0] == 1:
+        return np.full(n, float(flat[0]))
+    raise ValueError(
+        f"Intervention value must be a scalar or a 1-D array of length "
+        f"{n}, got shape {arr.shape}."
+    )
+
+
+def _scale_cross_section_intervention(
+    var: str,
+    arr: np.ndarray,
+    data: nw.DataFrame,
+    scaling_factors: ScalingFactors | None,
+) -> np.ndarray:
+    """Divide a length-n intervention by the column's per-row scale factors."""
+    if scaling_factors is None:
+        return arr
+    return np.asarray(
+        scaling_factors.to_internal(
+            arr,
+            kind="regressor",
+            dims=ScaleContext(term=var, data=data),
+        )
+    )
+
+
+def _scale_scan_intervention(
+    var: str,
+    mat: np.ndarray,
+    data: nw.DataFrame,
+    scan_info: Any,
+    scaling_factors: ScalingFactors | None,
+) -> np.ndarray:
+    """Divide a ``(n_times, n_units)`` intervention by scan-aligned factors."""
+    if scaling_factors is None:
+        return mat
+    return np.asarray(
+        scaling_factors.to_internal(
+            mat,
+            kind="regressor",
+            dims=ScaleContext(term=var, data=data, scan_info=scan_info),
+        )
+    )
+
+
+def _broadcast_intervention(
+    ones: xr.DataArray, val: float | np.ndarray, n: int
+) -> xr.DataArray:
+    """Broadcast an intervention value to ``(chain, draw[, unit])``."""
+    arr = _intervention_array(val, n)
+    if np.unique(arr).size == 1:
+        return ones * float(arr[0])
+    per_unit = xr.DataArray(arr, dims=["unit"], coords={"unit": np.arange(n)})
+    return ones * per_unit
+
+
+def _as_unit_dim(mu: xr.DataArray) -> xr.DataArray:
+    """Rename the first observation dim of *mu* to ``unit``."""
+    obs = _obs_dims(mu)
+    if not obs:
+        return mu
+    return mu.rename({obs[0]: "unit"})
+
+
+def _business_exog_value(
+    var: str,
+    data: nw.DataFrame,
+    subgroup_indices: np.ndarray | None,
+    scaling_factors: ScalingFactors | None,
 ) -> float:
-    """Empirical fill for an exogenous variable, restricted to a subgroup."""
+    """Empirical fill for an exogenous variable in business units."""
     if var not in data.columns:
         return 0.0
-    col = data[var].to_numpy()
+    values = np.asarray(data[var].to_numpy(), dtype=float)
+    if scaling_factors is not None:
+        values = np.asarray(
+            scaling_factors.to_business(
+                values,
+                kind="regressor",
+                dims=ScaleContext(term=var, data=data),
+            ),
+            dtype=float,
+        )
     if subgroup_indices is not None:
-        col = col[subgroup_indices]
-    return _exogenous_fill(col)
+        values = values[subgroup_indices]
+    return _exogenous_fill(values)
 
 
 def run_do_pymc(
@@ -664,6 +1390,9 @@ def run_do_pymc(
     kind: str = "mean",
     families: dict[str, str] | None = None,
     subgroup_indices: np.ndarray | None = None,
+    average_units: bool = True,
+    scaling_factors: ScalingFactors | None = None,
+    categorical_vars: set[str] | None = None,
 ) -> DoResult:
     """Run the do-operator using PyMC-native graph surgery.
 
@@ -698,6 +1427,13 @@ def run_do_pymc(
         provided, endogenous variable draws are averaged over only
         these rows (e.g., the treated subgroup for ATT). ``None``
         (default) uses all rows.
+    average_units : bool
+        When ``True`` (default), average response means over observation
+        rows for g-computation. When ``False``, keep a ``unit`` dim.
+    scaling_factors : ScalingFactors | None
+        Fitted scale factors. When given, ``set`` values for scaled
+        columns are treated as business units and divided by the
+        per-row factor before graph surgery.
 
     Returns
     -------
@@ -709,31 +1445,34 @@ def run_do_pymc(
         set = {}
     if families is None:
         families = {}
+    if categorical_vars is None:
+        categorical_vars = builtins.set()
 
     N = len(data)
     latent = graph_info.latent
 
-    free_rv_names = {rv.name for rv in gen_model.free_RVs}
-    det_names_set = {d.name for d in gen_model.deterministics}
-
-    block_vars = {
-        var
-        for var in graph_info.topological_order
-        if var in graph_info.endogenous
-        and var not in free_rv_names
-        and var not in latent
-        and f"mu_{var}" in det_names_set
-    }
+    block_vars = {v for block in graph_info.residual_blocks for v in block}
 
     replacements: dict[str, Any] = {}
+    data_basis_bindings = getattr(gen_model, "_pathmc_data_bases", {})
     for var, val in set.items():
         key = f"mu_{var}" if (var in latent or var in block_vars) else var
-        arr = np.full(N, val)
+        arr = _scale_cross_section_intervention(
+            var, _intervention_array(val, N), data, scaling_factors
+        )
         target_dtype = gen_model[key].dtype
         replacements[key] = arr.astype(target_dtype)
+        if data_basis_bindings:
+            from pathmc.basis import replay_data_bases
+
+            for data_name, columns in replay_data_bases(
+                data_basis_bindings, {var: arr}
+            ).items():
+                replacements[data_name] = columns.astype(gen_model[data_name].dtype)
 
     if kind == "mean":
-        do_model = pm.do(gen_model, replacements)
+        with _forced_generative_carry(gen_model):
+            do_model = pm.do(gen_model, replacements)
 
         mean_det_names: dict[str, str] = {}
         expr_replacements: dict[Any, Any] = {}
@@ -780,21 +1519,30 @@ def run_do_pymc(
         data_vars: dict[str, xr.DataArray] = {}
         for var in graph_info.topological_order:
             if var in set:
-                data_vars[var] = ones * float(np.mean(set[var]))
+                data_vars[var] = _broadcast_intervention(ones, set[var], N)
             elif var in graph_info.exogenous:
-                data_vars[var] = ones * _exog_value(var, data, subgroup_indices)
+                if var in categorical_vars:
+                    continue
+                data_vars[var] = ones * _business_exog_value(
+                    var, data, subgroup_indices, scaling_factors
+                )
             else:
                 mu = _apply_inverse_link(
                     det[mean_det_names[var]], families.get(var, "")
                 )
+                mu = _to_business_units(var, mu, data, scaling_factors)
                 if subgroup_indices is not None:
                     mu = mu.isel({_obs_dims(mu)[0]: subgroup_indices})
-                # Average over observation rows: g-computation standardization.
-                data_vars[var] = mu.mean(_obs_dims(mu))
+                if average_units:
+                    # Average over observation rows: g-computation standardization.
+                    data_vars[var] = mu.mean(_obs_dims(mu))
+                else:
+                    data_vars[var] = _as_unit_dim(mu)
 
         return DoResult(ds=xr.Dataset(data_vars))
 
-    do_model = pm.do(gen_model, replacements)
+    with _forced_generative_carry(gen_model):
+        do_model = pm.do(gen_model, replacements)
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", message="Could not extract data from symbolic observation"
@@ -823,10 +1571,15 @@ def run_do_pymc(
     predictive_vars: dict[str, xr.DataArray] = {}
     for var in graph_info.topological_order:
         if var in set:
-            predictive_vars[var] = ones * float(np.mean(set[var]))
+            predictive_vars[var] = _broadcast_intervention(ones, set[var], N)
         elif var in graph_info.exogenous:
-            predictive_vars[var] = ones * _exog_value(var, data, subgroup_indices)
+            if var in categorical_vars:
+                continue
+            predictive_vars[var] = ones * _business_exog_value(
+                var, data, subgroup_indices, scaling_factors
+            )
         elif (src := _predictive_source(ppc, extra_det, var)) is not None:
+            src = _to_business_units(var, src, data, scaling_factors)
             if subgroup_indices is not None:
                 src = src.isel({_obs_dims(src)[0]: subgroup_indices})
             # Each row is its own draw: keep them on a ``unit`` axis that
@@ -835,6 +1588,43 @@ def run_do_pymc(
             predictive_vars[var] = src.rename({obs[0]: "unit"}) if obs else src
 
     return DoResult(ds=xr.Dataset(predictive_vars))
+
+
+def _panel_predictive_sample_kwargs(
+    do_model: pm.Model,
+    graph_info: GraphInfo,
+    set: dict[str, float | np.ndarray],
+) -> dict[str, Any]:
+    """Keyword args for ``sample_posterior_predictive`` on intervened scan panels.
+
+    Masked panel outcomes split into ``{var}_observed`` and
+    ``{var}_unobserved`` free RVs. After ``pm.do()`` changes upstream
+    nodes, PyMC freezes the unobserved imputations unless they are listed
+    in ``sample_vars``. We resample every ``*_unobserved`` imputation RV in
+    the do-model, not only those downstream of the intervention, so
+    predictive draws stay consistent with the intervened generative graph.
+    Requesting only ``sample_vars`` drops the merged outcome from
+    ``posterior_predictive``, so ``var_names`` must name the non-latent
+    endogenous variables we still read from the PPC output. Latents not
+    in ``set`` are excluded from ``var_names`` and recovered through
+    ``compute_deterministics`` with the fitted posterior (including
+    ``innovations_{var}`` for stochastic latents), not fresh process noise.
+    """
+    if not set:
+        return {}
+    unobs = [rv.name for rv in do_model.free_RVs if rv.name.endswith("_unobserved")]
+    if not unobs:
+        return {}
+    var_names = [
+        var
+        for var in graph_info.topological_order
+        if var in graph_info.endogenous
+        and var not in set
+        and var not in graph_info.latent
+    ]
+    if not var_names:
+        return {"sample_vars": unobs}
+    return {"sample_vars": unobs, "var_names": var_names}
 
 
 def run_do_panel_unified(
@@ -846,6 +1636,9 @@ def run_do_panel_unified(
     set: dict[str, float | np.ndarray] | None = None,
     kind: str = "mean",
     families: dict[str, str] | None = None,
+    observed_by_time: Mapping[str, np.ndarray] | None = None,
+    data: nw.DataFrame | None = None,
+    scaling_factors: ScalingFactors | None = None,
 ) -> DoResult:
     """Run the do-operator on a scan-compiled panel model.
 
@@ -872,6 +1665,15 @@ def run_do_panel_unified(
         ``"mean"`` or ``"predictive"``.
     families : dict[str, str] | None
         Per-variable distribution families.
+    observed_by_time : Mapping[str, np.ndarray] | None
+        Unit-mean observed series per variable for trajectory overlays.
+    data : nw.DataFrame | None
+        Fitted panel frame (row order matching ``scan_info.sort_idx``).
+        Required when *scaling_factors* is given.
+    scaling_factors : ScalingFactors | None
+        Fitted scale factors. When given, ``set`` values for scaled
+        columns are treated as business units and divided by the
+        scan-aligned factor before graph surgery.
     """
     if set is None:
         set = {}
@@ -882,40 +1684,70 @@ def run_do_panel_unified(
     n_times = scan_info.n_times
     n_units = scan_info.n_units
     latent = graph_info.latent
+    stochastic_latent = {
+        v for v in latent if families.get(v, "gaussian") == "latent_normal"
+    }
 
     replacements: dict[str, Any] = {}
+    scan_intervene_updates: dict[str, np.ndarray] = {}
     for var, val in set.items():
         if isinstance(val, np.ndarray):
             mat = np.broadcast_to(val[:, None], (n_times, n_units)).copy()
         else:
             mat = np.full((n_times, n_units), val)
-        key = f"mu_{var}" if var in latent else var
+        if scaling_factors is not None:
+            if data is None:
+                raise ValueError(
+                    "scaling_factors requires data= so per-unit divisors "
+                    "can be aligned to the scan layout."
+                )
+            mat = _scale_scan_intervention(var, mat, data, scan_info, scaling_factors)
+        # Outer graph-surgery replacement, as before: needed so the
+        # intervened var is no longer a free RV that compute_deterministics /
+        # sample_posterior_predictive must bind from the posterior (the
+        # fitted idata never sampled it -- it is observed during fit()).
+        if var in latent and var not in stochastic_latent:
+            key = f"mu_{var}"
+        else:
+            key = var
         target_dtype = gen_model[key].dtype
         replacements[key] = mat.astype(target_dtype)
+        if var in graph_info.endogenous:
+            # Endogenous vars (incl. latent) *also* participate in the
+            # scan's own temporal recursion: lag()/contemporaneous
+            # references inside step_fn resolve from that step's internal
+            # computation, never from the outer free RV / Deterministic
+            # named ``var`` -- so the graph-surgery replacement above cannot
+            # sever those edges. Set the dedicated override channel too, so
+            # every downstream consumer *inside* the scan sees the severed
+            # value (see the do_intervene_nodes comment in compile.py).
+            node_name = f"_do_intervene_{var}"
+            scan_intervene_updates[node_name] = mat.astype(gen_model[node_name].dtype)
 
     if kind == "mean":
         for var in graph_info.topological_order:
             if var in graph_info.endogenous and var not in set and var not in latent:
                 replacements[var] = gen_model[f"mu_{var}"] * 1
 
-        stochastic_latent = {
-            v for v in latent if families.get(v, "gaussian") == "latent_normal"
-        }
-
-        do_model = pm.do(gen_model, replacements)
         det_names = []
         for var in graph_info.topological_order:
-            if var in graph_info.endogenous:
+            if var in graph_info.endogenous and var not in set:
                 if var in stochastic_latent:
                     det_names.append(var)
                 else:
                     det_names.append(f"mu_{var}")
-        det = pm.compute_deterministics(
-            posterior(idata),
-            model=do_model,
-            var_names=det_names,
-            progressbar=False,
-        )
+
+        with (
+            _forced_generative_carry(gen_model),
+            _scan_do_intervention(gen_model, scan_intervene_updates),
+        ):
+            do_model = pm.do(gen_model, replacements)
+            det = pm.compute_deterministics(
+                posterior(idata),
+                model=do_model,
+                var_names=det_names,
+                progressbar=False,
+            )
 
         ones = _chain_draw_ones(posterior(idata))
         time_idx = (
@@ -932,35 +1764,51 @@ def run_do_panel_unified(
                 data_vars[var] = ones * 0.0
             elif var in graph_info.endogenous:
                 det_key = var if var in stochastic_latent else f"mu_{var}"
-                data_vars[var] = _panel_unit_mean(det[det_key], time_idx)
+                raw = _to_business_units(
+                    var,
+                    det[det_key],
+                    data,
+                    scaling_factors,
+                    scan_info,
+                )
+                data_vars[var] = _panel_unit_mean(raw, time_idx)
 
-        return DoResult(ds=xr.Dataset(data_vars))
+        return DoResult(
+            ds=xr.Dataset(data_vars),
+            observed_by_time=observed_by_time,
+        )
 
     # kind == "predictive"
-    do_model = pm.do(gen_model, replacements)
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", message="Could not extract data from symbolic observation"
-        )
-        with do_model:
-            ppc = pm.sample_posterior_predictive(idata, progressbar=False)
-
-    stochastic_latent = {
-        v for v in latent if families.get(v, "gaussian") == "latent_normal"
-    }
     latent_det_names = []
     for var in graph_info.topological_order:
         if var in latent and var not in set:
             latent_det_names.append(var if var in stochastic_latent else f"mu_{var}")
-    if latent_det_names:
-        latent_det = pm.compute_deterministics(
-            posterior(idata),
-            model=do_model,
-            var_names=latent_det_names,
-            progressbar=False,
-        )
-    else:
-        latent_det = None
+
+    with (
+        _forced_generative_carry(gen_model),
+        _scan_do_intervention(gen_model, scan_intervene_updates),
+    ):
+        do_model = pm.do(gen_model, replacements)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message="Could not extract data from symbolic observation"
+            )
+            with do_model:
+                ppc = pm.sample_posterior_predictive(
+                    idata,
+                    progressbar=False,
+                    **_panel_predictive_sample_kwargs(do_model, graph_info, set),
+                )
+
+        if latent_det_names:
+            latent_det = pm.compute_deterministics(
+                posterior(idata),
+                model=do_model,
+                var_names=latent_det_names,
+                progressbar=False,
+            )
+        else:
+            latent_det = None
 
     ones = _chain_draw_ones(posterior(idata))
     time_idx = (
@@ -974,12 +1822,27 @@ def run_do_panel_unified(
         elif var in graph_info.exogenous:
             predictive_vars[var] = ones * 0.0
         elif var in ppc.posterior_predictive:
-            predictive_vars[var] = _panel_unit_mean(
-                ppc.posterior_predictive[var], time_idx
+            raw = _to_business_units(
+                var,
+                ppc.posterior_predictive[var],
+                data,
+                scaling_factors,
+                scan_info,
             )
+            predictive_vars[var] = _panel_unit_mean(raw, time_idx)
         elif latent_det is not None:
             det_key = var if var in stochastic_latent else f"mu_{var}"
             if det_key in latent_det:
-                predictive_vars[var] = _panel_unit_mean(latent_det[det_key], time_idx)
+                raw = _to_business_units(
+                    var,
+                    latent_det[det_key],
+                    data,
+                    scaling_factors,
+                    scan_info,
+                )
+                predictive_vars[var] = _panel_unit_mean(raw, time_idx)
 
-    return DoResult(ds=xr.Dataset(predictive_vars))
+    return DoResult(
+        ds=xr.Dataset(predictive_vars),
+        observed_by_time=observed_by_time,
+    )
