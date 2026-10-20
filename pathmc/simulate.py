@@ -1411,13 +1411,18 @@ def _residual_predictive_sample_kwargs(
         for name in sorted(free_names)
         if name not in joint_names and name not in graph_info.endogenous
     ]
-    var_names = [
-        var
-        for var in graph_info.topological_order
-        if var in graph_info.endogenous
-        and var not in intervened
-        and var in do_model.named_vars
-    ]
+    var_names = []
+    for var in graph_info.topological_order:
+        if var not in graph_info.endogenous or var in intervened:
+            continue
+        if var in do_model.named_vars:
+            var_names.append(var)
+            continue
+        # A deterministic latent is only ``mu_{var}``. Computing it later
+        # from a zero-filled posterior drops the sampled parent joint.
+        mu_name = f"mu_{var}"
+        if mu_name in do_model.named_vars:
+            var_names.append(mu_name)
     kwargs: dict[str, Any] = {}
     if resample:
         kwargs["sample_vars"] = resample
@@ -1506,20 +1511,26 @@ def run_do_pymc(
     replacements: dict[str, Any] = {}
     data_basis_bindings = getattr(gen_model, "_pathmc_data_bases", {})
     for var, val in set.items():
-        # Generative siblings name the block member itself. Replacing
-        # ``mu_{var}`` would leave that Deterministic, and descendants,
-        # centered on the unintervened structural mean.
+        # Generative siblings name the block member itself. Outside
+        # descendants read that noisy slice, so the intervention replaces
+        # it. A later block member was wired to ``mu_{var}`` before the
+        # slice existed; replacing only the slice leaves that mean, and
+        # the within-block descendant, on the unintervened parent.
+        keys: list[str] = []
         if var in block_vars and var in gen_model.named_vars:
-            key = var
+            keys.append(var)
+            mu_name = f"mu_{var}"
+            if mu_name in gen_model.named_vars:
+                keys.append(mu_name)
         elif var in latent or var in block_vars:
-            key = f"mu_{var}"
+            keys.append(f"mu_{var}")
         else:
-            key = var
+            keys.append(var)
         arr = _scale_cross_section_intervention(
             var, _intervention_array(val, N), data, scaling_factors
         )
-        target_dtype = gen_model[key].dtype
-        replacements[key] = arr.astype(target_dtype)
+        for key in keys:
+            replacements[key] = arr.astype(gen_model[key].dtype)
         if data_basis_bindings:
             from pathmc.basis import replay_data_bases
 

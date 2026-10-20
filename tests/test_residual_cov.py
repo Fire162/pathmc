@@ -243,6 +243,30 @@ class TestResidualPredictiveDo:
         model._idata = az.from_dict({"posterior": posterior})
         return model
 
+    def _point_model(
+        self,
+        spec: str,
+        data: pd.DataFrame,
+        overrides: dict[str, float | np.ndarray],
+        latent: list[str] | None = None,
+    ) -> pathmc.PathModel:
+        import arviz as az
+
+        model = pathmc.model(spec, data=data, latent=latent)
+        free = [rv.name for rv in model.pymc_model.free_RVs]
+        with model.pymc_model:
+            prior = pm.sample_prior_predictive(draws=1, random_seed=1)
+        point = prior["prior"].to_dataset().isel(chain=0, draw=0)
+        n_draws = 40
+        posterior = {}
+        for name in free:
+            arr = np.asarray(point[name].values)
+            posterior[name] = np.broadcast_to(arr, (1, n_draws, *arr.shape)).copy()
+        for name, value in overrides.items():
+            posterior[name][...] = value
+        model._idata = az.from_dict({"posterior": posterior})
+        return model
+
     def test_sibling_wires_descendant_through_block_member(self):
         from pytensor.graph.traversal import ancestors
 
@@ -277,6 +301,52 @@ class TestResidualPredictiveDo:
         base_var = float(np.var(baseline.dataset["Z"].to_numpy()))
         fixed_var = float(np.var(at1.dataset["Z"].to_numpy()))
         assert base_var > 10 * fixed_var, (base_var, fixed_var)
+
+    def test_predictive_intervention_shifts_within_block_descendant(self):
+        rng = np.random.default_rng(0)
+        n = 40
+        data = pd.DataFrame({
+            "X": rng.normal(size=n),
+            "Y1": rng.normal(size=n),
+            "Y2": rng.normal(size=n),
+        })
+        model = self._point_model(
+            "Y1 ~ X\nY2 ~ Y1\nY1 ~~ Y2",
+            data,
+            {"beta_Y2": 2.0, "chol_Y1_Y2": np.array([1.0, 0.0, 1.0])},
+        )
+        shift = model.do(set={"Y1": 1.0}, kind="predictive").mean("Y2") - model.do(
+            set={"Y1": 0.0}, kind="predictive"
+        ).mean("Y2")
+        assert abs(shift - 2.0) < 0.35, shift
+
+    def test_predictive_latent_reads_sampled_parent_joint(self):
+        n = 40
+        data = pd.DataFrame({
+            "X": np.zeros(n),
+            "Y1": np.zeros(n),
+            "Y2": np.zeros(n),
+            "Z": np.zeros(n),
+        })
+        model = self._point_model(
+            "Y1 ~ X\nY2 ~ X\nL ~ Y1\nZ ~ L\nY1 ~~ Y2",
+            data,
+            {
+                "beta_Y1": 3.0,
+                "beta_L": 2.0,
+                "beta_Z": 1.0,
+                "sigma_Z": 0.3,
+                "chol_Y1_Y2": np.array([1.0, 0.0, 1.0]),
+            },
+            latent=["L"],
+        )
+        # X is 0 and both Y1 coefficients are 3, so mu_Y1 is 3.
+        # Both L coefficients are 2, so the structural latent is 2 + 2*3.
+        structural = model.do(kind="mean").mean("L")
+        predictive = model.do(kind="predictive")
+        assert abs(structural - 8.0) < 1e-6, structural
+        assert abs(predictive.mean("L") - structural) < 0.75, predictive.mean("L")
+        assert float(np.var(predictive.dataset["L"].to_numpy())) > 1.0
 
 
 def _panel_residual_cov_data() -> pd.DataFrame:
