@@ -78,6 +78,28 @@ def test_simulate_uses_the_centered_unit_intercept():
     np.testing.assert_allclose(means.to_numpy(), alphas, atol=1e-4)
 
 
+def test_simulate_keeps_centered_intercept_when_scale_is_zero():
+    data = _panel(n_units=4, n_times=6, seed=1)
+    data["X"] = 0.0
+    alphas = np.array([10.0, 20.0, 30.0, 40.0])
+    sim = pathmc.simulate(
+        "Y ~ X",
+        data=data,
+        params={
+            "beta_Y": [0.0],
+            "sigma_Y": 1e-6,
+            "alpha_Y": alphas,
+            "mu_alpha_Y": 0.0,
+            "sigma_alpha_Y": 0.0,
+        },
+        panel={"unit": "unit", "time": "time"},
+        pooling="partial",
+        random_seed=0,
+    )
+    means = sim.groupby("unit", observed=True)["Y"].mean().sort_index()
+    np.testing.assert_allclose(means.to_numpy(), alphas, atol=1e-4)
+
+
 def test_random_slope_is_offset_plus_location():
     data = _panel(n_units=4, n_times=5)
     model = pathmc.model(
