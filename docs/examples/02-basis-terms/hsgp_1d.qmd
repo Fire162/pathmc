@@ -86,7 +86,7 @@ The default priors expose the kernel amplitude (`eta_response_dose`), lengthscal
 model.priors()
 ```
 
-The lengthscale prior is in **raw input units**. The default `InverseGamma(3, 1)` has mean 0.5, so an input that spans several units pulls against it. Override `ell_response_dose` so its mean sits on the dose scale (here, 2 dose units). A range-scaled default is tracked in [issue #375](https://github.com/pymc-labs/pathmc/issues/375). Even with that prior, this posterior still diverges at the default target acceptance, because the lengthscale and the basis weights trade off. `target_accept=0.99` is the setting that samples it cleanly.
+The lengthscale prior is in **raw input units**. With data, the default is `InverseGamma(3, beta)` where `beta` is the observed span of the input, so the mean is half that span. Dose runs from 0 to 8, so the default mean is 4. The cell below tightens it to a mean of 2 dose units. Even with that prior, this posterior still diverges at the default target acceptance, because the lengthscale and the basis weights trade off. `target_accept=0.99` is the setting that samples it cleanly.
 
 ```{python}
 # Mean lengthscale of 2 dose units: InverseGamma(3, 4) has mean 4 / (3 - 1).

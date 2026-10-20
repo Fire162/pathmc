@@ -34,6 +34,7 @@ from typing import Any, TypeAlias
 
 import numpy as np
 import pymc as pm
+from pymc_extras.prior import Prior
 from pytensor.tensor.variable import TensorVariable
 
 from pathmc.basis import Basis, BasisCapabilities, Call
@@ -49,6 +50,46 @@ COV_FUNCS: dict[str, type] = {
     "matern52": pm.gp.cov.Matern52,
     "matern32": pm.gp.cov.Matern32,
 }
+
+LENGTHSCALE_ALPHA = 3
+UNIT_LENGTHSCALE_BETA = 1
+
+
+def lengthscale_prior(span: float | None = None) -> Prior:
+    """InverseGamma lengthscale prior in raw input units.
+
+    ``InverseGamma(3, 1)`` has mean 0.5, which matches a unit-span input.
+    Mean is ``beta / (alpha - 1)``, so ``beta = span`` keeps that ratio when
+    the column's observed range is known. A missing, constant, or non-finite
+    span keeps the unit default: a zero range has no lengthscale to match.
+    """
+    beta: int | float = UNIT_LENGTHSCALE_BETA
+    if span is not None and np.isfinite(span) and span > 0:
+        beta = float(span)
+    return Prior("InverseGamma", alpha=LENGTHSCALE_ALPHA, beta=beta)
+
+
+def input_span(data: Any, column: str) -> float | None:
+    """Return ``max(column) - min(column)`` over finite values, or None."""
+    if column not in getattr(data, "columns", ()):
+        return None
+    values = np.asarray(data[column].to_numpy(), dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return None
+    span = float(finite.max() - finite.min())
+    if not np.isfinite(span) or span <= 0:
+        return None
+    return span
+
+
+def apply_lengthscale_prior(
+    priors: PriorConfig, key: str, data: Any, column: str
+) -> None:
+    """Replace a registered lengthscale prior with one scaled to *column*."""
+    if key not in priors:
+        return
+    priors[key] = lengthscale_prior(input_span(data, column))
 
 
 class HSGPBasis(Basis):
@@ -105,7 +146,7 @@ class HSGPBasis(Basis):
 
         assert isinstance(call, HSGPCall)
         var = call.variable
-        priors.setdefault(f"ell_{lhs}_{var}", Prior("InverseGamma", alpha=3, beta=1))
+        priors.setdefault(f"ell_{lhs}_{var}", lengthscale_prior())
         priors.setdefault(f"eta_{lhs}_{var}", Prior("HalfNormal", sigma=1))
         if not call.centered:
             priors.setdefault(
