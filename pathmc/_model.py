@@ -1675,9 +1675,11 @@ class PathModel:
         frame, but ``given_lmc_violations``, ``n_lmc_tests``,
         ``violations``, and the permutation fraction all exclude it.
         A permuted DAG that produced no written parental test is omitted
-        from that fraction, not scored as zero violations. The summary
-        names the collapsed count separately. If every requested test
-        collapses, the DAG cannot be evaluated.
+        from that fraction, not scored as zero violations. If every drawn
+        permutation is omitted, ``falsified`` is unset and the summary,
+        compact repr, and HTML say the LMC comparison was not run. The
+        summary names the collapsed count separately. If every requested
+        test collapses, the DAG cannot be evaluated.
 
         Uses the observed data, not the posterior, and works before
         sampling. Models with residual covariances (``~~``) are not

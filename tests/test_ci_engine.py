@@ -790,6 +790,39 @@ class TestRankCollapseIsVisible:
         fig = result.plot()
         assert fig.axes[0].get_title().startswith("DAG falsification")
 
+    def test_unscored_permutation_baseline_is_not_a_pass(self):
+        rng = np.random.default_rng(0)
+        n = 80
+        b = rng.normal(size=n)
+        frame = pd.DataFrame({
+            "B": b,
+            "Y": b + rng.normal(scale=0.2, size=n),
+            "Z": b + rng.normal(scale=0.2, size=n),
+            "K": np.ones(n),
+        })
+        model = pathmc.model("Y ~ B\nZ ~ B\nK ~ B", data=frame)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            result = model.falsify(
+                n_permutations=1,
+                random_seed=6,
+                include_unconditional=False,
+            )
+        assert result.can_evaluate is True
+        assert result.falsifiable is True
+        assert len(result.perm_lmc_violation_fractions) == 0
+        assert len(result.perm_tpa_violation_fractions) == result.n_permutations
+        assert result.falsified is None
+        text = "\n".join(result._summary_lines())
+        assert "LMC comparison was not run" in text
+        assert "not rejected" not in text
+        assert "not_compared" in repr(result)
+        assert "not_rejected" not in repr(result)
+        html = result._repr_html_()
+        assert "Not compared" in html
+        assert "LMC comparison was not run" in html
+        assert "Not rejected" not in html
+
     def test_falsify_full_rank_parents_do_not_warn(self, frame):
         model = pathmc.model("M ~ X\nY ~ M", data=frame[["X", "M", "Y"]])
         with warnings.catch_warnings():

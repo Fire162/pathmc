@@ -155,7 +155,8 @@ class FalsificationResult(ResultReprMixin):
         ``given_lmc_violations``, ``n_lmc_tests``, ``violations``, and
         the permutation fraction. A permuted DAG that produced no
         written parental test is omitted from that fraction, not scored
-        as zero violations.
+        as zero violations. If every drawn permutation is omitted,
+        :attr:`falsified` is unset.
     """
 
     given_lmc_violations: int
@@ -201,13 +202,15 @@ class FalsificationResult(ResultReprMixin):
         (``p_value_tpa < significance_level``) and its LMC violations are
         *not* clearly better than the permuted baseline (``p_value_lmc``
         exceeds :attr:`significance_level`). ``None`` when
-        :attr:`can_evaluate` is ``False``.
+        :attr:`can_evaluate` is ``False``, and when permutations ran but
+        none produced a written parental test. The latter is not a pass
+        and not a fail of the LMC comparison.
 
         The strict ``<`` on the informativeness side mirrors Eulig et al.
         (2023) / dowhy, where a DAG sitting exactly at the boundary
         (``p_value_tpa == significance_level``) is not rejected.
         """
-        if not self.can_evaluate:
+        if not self.can_evaluate or self._lmc_not_compared():
             return None
         return bool(
             self.p_value_lmc > self.significance_level
@@ -233,6 +236,14 @@ class FalsificationResult(ResultReprMixin):
         """
         return self.n_lmc_tests == 0 and n_rank_collapsed(self.local_violations) > 0
 
+    def _lmc_not_compared(self) -> bool:
+        """Whether permutations ran but none produced a written test.
+
+        Those draws are omitted from the LMC fraction. Publishing a
+        rejection decision would treat "not tested" as a pass or a fail.
+        """
+        return self.n_permutations > 0 and len(self.perm_lmc_violation_fractions) == 0
+
     def _summary_lines(self) -> list[str]:
         n_collapsed = n_rank_collapsed(self.local_violations)
         if not self.can_evaluate:
@@ -257,8 +268,7 @@ class FalsificationResult(ResultReprMixin):
         if n_scored == 0:
             comparison = (
                 "No permuted DAG produced a written parental test, so the "
-                "permutation fraction was not computed and the DAG is not "
-                "rejected on that comparison."
+                "permutation fraction was not computed."
             )
         elif omitted:
             beats = (1.0 - self.p_value_lmc) * 100.0
@@ -299,10 +309,13 @@ class FalsificationResult(ResultReprMixin):
                 f"  {n_collapsed} parental {noun} rank-collapsed. Those "
                 f"p-values are not the requested parental independences."
             )
-            lines.append(
-                f"  Verdict: we {decision} the DAG on the tests that ran; "
-                f"rank-collapsed rows did not test the requested parent sets."
-            )
+            if self._lmc_not_compared():
+                lines.append("  Verdict: the LMC comparison was not run.")
+            else:
+                lines.append(
+                    f"  Verdict: we {decision} the DAG on the tests that ran; "
+                    "rank-collapsed rows did not test the requested parent sets."
+                )
         else:
             if n_scored == 0 or omitted:
                 lines.append(
@@ -314,7 +327,10 @@ class FalsificationResult(ResultReprMixin):
                     f"  The DAG violates {self.given_lmc_violations}/"
                     f"{self.n_lmc_tests} LMCs and {comparison}"
                 )
-            lines.append(f"  Verdict: we {decision} the DAG.")
+            if self._lmc_not_compared():
+                lines.append("  Verdict: the LMC comparison was not run.")
+            else:
+                lines.append(f"  Verdict: we {decision} the DAG.")
         return lines
 
     def _repr_compact(self) -> str:
@@ -324,7 +340,9 @@ class FalsificationResult(ResultReprMixin):
                 f"FalsificationResult(not_evaluable{collapsed}, "
                 f"{self.n_permutations} permutations)"
             )
-        if self.falsified:
+        if self._lmc_not_compared():
+            verdict = "not_compared"
+        elif self.falsified:
             verdict = "falsified"
         elif not self.falsifiable:
             verdict = "not_falsifiable"
@@ -365,17 +383,17 @@ class FalsificationResult(ResultReprMixin):
                 '<span style="color: red; font-weight: bold;">✗ Rejected</span> '
                 "— the data falsify this DAG."
             )
+        elif self._lmc_not_compared():
+            verdict = (
+                '<span style="color: orange; font-weight: bold;">⚠ Not '
+                "compared</span> — no permuted DAG produced a written "
+                "parental test, so the LMC comparison was not run."
+            )
         elif not self.falsifiable:
             verdict = (
                 '<span style="color: orange; font-weight: bold;">⚠ Not '
                 "informative</span> — too many permutations share its Markov "
                 "equivalence class to falsify it."
-            )
-        elif len(self.perm_lmc_violation_fractions) == 0:
-            verdict = (
-                '<span style="color: orange; font-weight: bold;">⚠ Not '
-                "compared</span> — no permuted DAG produced a written "
-                "parental test, so the LMC comparison was not run."
             )
         else:
             verdict = (
