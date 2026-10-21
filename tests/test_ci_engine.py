@@ -23,6 +23,7 @@ baseline rather than by algebra alone.
 
 import dataclasses
 import warnings
+from pathlib import Path
 
 import narwhals.stable.v1 as nw
 import numpy as np
@@ -35,6 +36,25 @@ from pathmc.falsify import _PartialCorrelationTester, falsify_graph
 from pathmc.graph import build_graph
 from pathmc.identify import ConditionalIndependence, _partial_correlation_result
 from pathmc.parse import parse_spec
+
+
+def _warning_is_from_caller(filename: str, caller: Path) -> bool:
+    """Whether this warning frame is the caller file.
+
+    A checkout whose path contains ``/pathmc/`` is still the caller when
+    the filename is that file. A ``pathmc`` module is not.
+    """
+    return Path(filename).resolve() == caller.resolve()
+
+
+def test_caller_attribution_accepts_a_checkout_named_pathmc() -> None:
+    caller = Path("/home/runner/work/pathmc/pathmc/tests/test_ci_engine.py")
+    assert _warning_is_from_caller(str(caller), caller)
+    package = Path("/home/runner/work/pathmc/pathmc/pathmc/_ci_report.py")
+    assert not _warning_is_from_caller(str(package), caller)
+    other_copy = Path("/tmp/elsewhere/tests/test_ci_engine.py")
+    assert not _warning_is_from_caller(str(other_copy), caller)
+
 
 # Values recorded from both implementations at aa80e4d (pre-unification).
 # The two implementations agree bitwise on these inputs; the pins use a
@@ -525,7 +545,7 @@ class TestRankCollapseIsVisible:
             result = model.test_implications()
         collapses = [w for w in caught if issubclass(w.category, UserWarning)]
         assert len(collapses) == 1
-        assert "/pathmc/" not in collapses[0].filename
+        assert _warning_is_from_caller(collapses[0].filename, Path(__file__))
         assert "rank collapse" in str(collapses[0].message)
         assert "M ⊥⊥ X | {C}" in str(collapses[0].message)
         assert "M ⊥⊥ Z | {C, X}" in str(collapses[0].message)
@@ -651,7 +671,7 @@ class TestRankCollapseIsVisible:
             if issubclass(w.category, UserWarning) and "rank collapse" in str(w.message)
         ]
         assert len(collapses) == 1
-        assert "/pathmc/" not in collapses[0].filename
+        assert _warning_is_from_caller(collapses[0].filename, Path(__file__))
         collapsed = result.local_violations[result.local_violations["rank_collapsed"]]
         assert set(collapsed["conditioning_set"]) == {"C"}
         assert (collapsed["requested_k"] == 1).all()
