@@ -26,13 +26,13 @@
 <!-- mu_search_traffic -->
 <g id="node1" class="node">
 <title>mu_search_traffic</title>
-<polygon fill="none" stroke="black" points="298.48,-466.36 183.48,-466.36 183.48,-408.86 298.48,-408.86 298.48,-466.36"/>
-<text text-anchor="middle" x="240.98" y="-449.06" font-family="Times,serif" font-size="14.00">mu_search_traffic</text>
-<text text-anchor="middle" x="240.98" y="-432.56" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="240.98" y="-416.06" font-family="Times,serif" font-size="14.00">Deterministic</text>
+<polygon fill="none" stroke="black" points="306.48,-466.36 191.48,-466.36 191.48,-408.86 306.48,-408.86 306.48,-466.36"/>
+<text text-anchor="middle" x="248.98" y="-449.06" font-family="Times,serif" font-size="14.00">mu_search_traffic</text>
+<text text-anchor="middle" x="248.98" y="-432.56" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="248.98" y="-416.06" font-family="Times,serif" font-size="14.00">Deterministic</text>
 </g>
 <!-- search_traffic -->
-<g id="node6" class="node">
+<g id="node3" class="node">
 <title>search_traffic</title>
 <ellipse fill="lightgrey" stroke="black" cx="235.98" cy="-320.29" rx="63.82" ry="40.66"/>
 <text text-anchor="middle" x="235.98" y="-331.74" font-family="Times,serif" font-size="14.00">search_traffic</text>
@@ -40,61 +40,67 @@
 <text text-anchor="middle" x="235.98" y="-298.74" font-family="Times,serif" font-size="14.00">Normal</text>
 </g>
 <!-- mu_search_traffic&#45;&gt;search_traffic -->
-<g id="edge1" class="edge">
+<g id="edge2" class="edge">
 <title>mu_search_traffic&#45;&gt;search_traffic</title>
-<path fill="none" stroke="black" d="M239.76,-408.4C239.29,-397.58 238.74,-384.86 238.2,-372.54"/>
-<polygon fill="black" stroke="black" points="241.72,-372.76 237.79,-362.92 234.72,-373.06 241.72,-372.76"/>
+<path fill="none" stroke="black" d="M245.8,-408.4C244.57,-397.48 243.12,-384.62 241.72,-372.19"/>
+<polygon fill="black" stroke="black" points="245.22,-372.02 240.62,-362.47 238.27,-372.8 245.22,-372.02"/>
 </g>
-<!-- season -->
+<!-- brand_spend -->
 <g id="node2" class="node">
-<title>season</title>
-<path fill="lightgrey" stroke="black" d="M173.98,-588.18C173.98,-588.18 143.98,-588.18 143.98,-588.18 137.98,-588.18 131.98,-582.18 131.98,-576.18 131.98,-576.18 131.98,-542.68 131.98,-542.68 131.98,-536.68 137.98,-530.68 143.98,-530.68 143.98,-530.68 173.98,-530.68 173.98,-530.68 179.98,-530.68 185.98,-536.68 185.98,-542.68 185.98,-542.68 185.98,-576.18 185.98,-576.18 185.98,-582.18 179.98,-588.18 173.98,-588.18"/>
-<text text-anchor="middle" x="158.98" y="-570.88" font-family="Times,serif" font-size="14.00">season</text>
-<text text-anchor="middle" x="158.98" y="-554.38" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="158.98" y="-537.88" font-family="Times,serif" font-size="14.00">Data</text>
+<title>brand_spend</title>
+<path fill="lightgrey" stroke="black" d="M205.48,-588.18C205.48,-588.18 144.48,-588.18 144.48,-588.18 138.48,-588.18 132.48,-582.18 132.48,-576.18 132.48,-576.18 132.48,-542.68 132.48,-542.68 132.48,-536.68 138.48,-530.68 144.48,-530.68 144.48,-530.68 205.48,-530.68 205.48,-530.68 211.48,-530.68 217.48,-536.68 217.48,-542.68 217.48,-542.68 217.48,-576.18 217.48,-576.18 217.48,-582.18 211.48,-588.18 205.48,-588.18"/>
+<text text-anchor="middle" x="174.98" y="-570.88" font-family="Times,serif" font-size="14.00">brand_spend</text>
+<text text-anchor="middle" x="174.98" y="-554.38" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="174.98" y="-537.88" font-family="Times,serif" font-size="14.00">Data</text>
 </g>
-<!-- season&#45;&gt;mu_search_traffic -->
-<g id="edge8" class="edge">
-<title>season&#45;&gt;mu_search_traffic</title>
-<path fill="none" stroke="black" d="M171.12,-530.3C177.64,-516.5 186.31,-499.95 195.98,-486.27 198.57,-482.61 201.42,-478.95 204.4,-475.37"/>
-<polygon fill="black" stroke="black" points="207.04,-477.68 210.99,-467.85 201.77,-473.07 207.04,-477.68"/>
+<!-- brand_spend&#45;&gt;mu_search_traffic -->
+<g id="edge9" class="edge">
+<title>brand_spend&#45;&gt;mu_search_traffic</title>
+<path fill="none" stroke="black" d="M192.33,-530.34C202.35,-514.11 215.08,-493.5 225.93,-475.93"/>
+<polygon fill="black" stroke="black" points="228.67,-478.16 230.95,-467.81 222.71,-474.48 228.67,-478.16"/>
 </g>
 <!-- mu_sales -->
-<g id="node4" class="node">
+<g id="node5" class="node">
 <title>mu_sales</title>
 <polygon fill="none" stroke="black" points="252.11,-227.23 161.86,-227.23 161.86,-169.73 252.11,-169.73 252.11,-227.23"/>
 <text text-anchor="middle" x="206.98" y="-209.93" font-family="Times,serif" font-size="14.00">mu_sales</text>
 <text text-anchor="middle" x="206.98" y="-193.43" font-family="Times,serif" font-size="14.00">~</text>
 <text text-anchor="middle" x="206.98" y="-176.93" font-family="Times,serif" font-size="14.00">Deterministic</text>
 </g>
-<!-- season&#45;&gt;mu_sales -->
-<g id="edge5" class="edge">
-<title>season&#45;&gt;mu_sales</title>
-<path fill="none" stroke="black" d="M149.38,-530.41C131.65,-473.6 99.63,-342.18 145.98,-247.13 148.07,-242.85 150.75,-238.85 153.82,-235.12"/>
-<polygon fill="black" stroke="black" points="156.2,-237.69 160.54,-228.02 151.12,-232.87 156.2,-237.69"/>
-</g>
-<!-- brand_spend -->
-<g id="node3" class="node">
-<title>brand_spend</title>
-<path fill="lightgrey" stroke="black" d="M277.48,-588.18C277.48,-588.18 216.48,-588.18 216.48,-588.18 210.48,-588.18 204.48,-582.18 204.48,-576.18 204.48,-576.18 204.48,-542.68 204.48,-542.68 204.48,-536.68 210.48,-530.68 216.48,-530.68 216.48,-530.68 277.48,-530.68 277.48,-530.68 283.48,-530.68 289.48,-536.68 289.48,-542.68 289.48,-542.68 289.48,-576.18 289.48,-576.18 289.48,-582.18 283.48,-588.18 277.48,-588.18"/>
-<text text-anchor="middle" x="246.98" y="-570.88" font-family="Times,serif" font-size="14.00">brand_spend</text>
-<text text-anchor="middle" x="246.98" y="-554.38" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="246.98" y="-537.88" font-family="Times,serif" font-size="14.00">Data</text>
-</g>
-<!-- brand_spend&#45;&gt;mu_search_traffic -->
-<g id="edge9" class="edge">
-<title>brand_spend&#45;&gt;mu_search_traffic</title>
-<path fill="none" stroke="black" d="M245.58,-530.34C244.79,-514.71 243.81,-495.02 242.95,-477.89"/>
-<polygon fill="black" stroke="black" points="246.45,-477.85 242.46,-468.04 239.46,-478.2 246.45,-477.85"/>
-</g>
 <!-- brand_spend&#45;&gt;mu_sales -->
-<g id="edge7" class="edge">
+<g id="edge3" class="edge">
 <title>brand_spend&#45;&gt;mu_sales</title>
-<path fill="none" stroke="black" d="M232.02,-530.42C222.94,-515.64 210.19,-498.16 194.98,-486.27 187.44,-480.37 180.78,-485.89 174.98,-478.27 143.86,-437.32 144.25,-295.04 162.98,-247.13 164.4,-243.51 166.24,-240 168.35,-236.63"/>
+<path fill="none" stroke="black" d="M163.51,-530.52C142.12,-473.91 102.27,-342.83 147.98,-247.13 149.82,-243.28 152.14,-239.65 154.79,-236.23"/>
+<polygon fill="black" stroke="black" points="157.37,-238.59 161.45,-228.82 152.16,-233.91 157.37,-238.59"/>
+</g>
+<!-- search_traffic&#45;&gt;mu_sales -->
+<g id="edge5" class="edge">
+<title>search_traffic&#45;&gt;mu_sales</title>
+<path fill="none" stroke="black" d="M226.41,-279.73C223.22,-266.55 219.67,-251.88 216.48,-238.72"/>
+<polygon fill="black" stroke="black" points="219.91,-237.99 214.15,-229.1 213.1,-239.64 219.91,-237.99"/>
+</g>
+<!-- season -->
+<g id="node4" class="node">
+<title>season</title>
+<path fill="lightgrey" stroke="black" d="M277.98,-588.18C277.98,-588.18 247.98,-588.18 247.98,-588.18 241.98,-588.18 235.98,-582.18 235.98,-576.18 235.98,-576.18 235.98,-542.68 235.98,-542.68 235.98,-536.68 241.98,-530.68 247.98,-530.68 247.98,-530.68 277.98,-530.68 277.98,-530.68 283.98,-530.68 289.98,-536.68 289.98,-542.68 289.98,-542.68 289.98,-576.18 289.98,-576.18 289.98,-582.18 283.98,-588.18 277.98,-588.18"/>
+<text text-anchor="middle" x="262.98" y="-570.88" font-family="Times,serif" font-size="14.00">season</text>
+<text text-anchor="middle" x="262.98" y="-554.38" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="262.98" y="-537.88" font-family="Times,serif" font-size="14.00">Data</text>
+</g>
+<!-- season&#45;&gt;mu_search_traffic -->
+<g id="edge8" class="edge">
+<title>season&#45;&gt;mu_search_traffic</title>
+<path fill="none" stroke="black" d="M259.7,-530.34C257.87,-514.71 255.57,-495.02 253.57,-477.89"/>
+<polygon fill="black" stroke="black" points="257.06,-477.56 252.42,-468.03 250.1,-478.37 257.06,-477.56"/>
+</g>
+<!-- season&#45;&gt;mu_sales -->
+<g id="edge6" class="edge">
+<title>season&#45;&gt;mu_sales</title>
+<path fill="none" stroke="black" d="M255.73,-530.42C250.31,-515.07 241.31,-497.03 226.98,-486.27 211.09,-474.34 197.05,-492.32 182.98,-478.27 148.04,-443.36 167.45,-418.14 162.98,-368.95 158.09,-315.03 143.27,-297.56 162.98,-247.13 164.4,-243.51 166.24,-240 168.35,-236.63"/>
 <polygon fill="black" stroke="black" points="171.01,-238.93 174.05,-228.78 165.34,-234.82 171.01,-238.93"/>
 </g>
 <!-- sales -->
-<g id="node7" class="node">
+<g id="node6" class="node">
 <title>sales</title>
 <ellipse fill="lightgrey" stroke="black" cx="189.98" cy="-81.16" rx="41.01" ry="40.66"/>
 <text text-anchor="middle" x="189.98" y="-92.61" font-family="Times,serif" font-size="14.00">sales</text>
@@ -108,7 +114,7 @@
 <polygon fill="black" stroke="black" points="200.97,-132.71 196.05,-123.33 194.05,-133.73 200.97,-132.71"/>
 </g>
 <!-- perf_spend -->
-<g id="node5" class="node">
+<g id="node7" class="node">
 <title>perf_spend</title>
 <path fill="lightgrey" stroke="black" d="M381.98,-349.04C381.98,-349.04 329.98,-349.04 329.98,-349.04 323.98,-349.04 317.98,-343.04 317.98,-337.04 317.98,-337.04 317.98,-303.54 317.98,-303.54 317.98,-297.54 323.98,-291.54 329.98,-291.54 329.98,-291.54 381.98,-291.54 381.98,-291.54 387.98,-291.54 393.98,-297.54 393.98,-303.54 393.98,-303.54 393.98,-337.04 393.98,-337.04 393.98,-343.04 387.98,-349.04 381.98,-349.04"/>
 <text text-anchor="middle" x="355.98" y="-331.74" font-family="Times,serif" font-size="14.00">perf_spend</text>
@@ -116,16 +122,10 @@
 <text text-anchor="middle" x="355.98" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
 </g>
 <!-- perf_spend&#45;&gt;mu_sales -->
-<g id="edge3" class="edge">
+<g id="edge7" class="edge">
 <title>perf_spend&#45;&gt;mu_sales</title>
 <path fill="none" stroke="black" d="M342.54,-291.22C334.44,-276.6 322.98,-259.29 308.98,-247.13 295.61,-235.51 278.92,-226.15 262.93,-218.9"/>
 <polygon fill="black" stroke="black" points="264.53,-215.78 253.97,-215.03 261.76,-222.2 264.53,-215.78"/>
-</g>
-<!-- search_traffic&#45;&gt;mu_sales -->
-<g id="edge6" class="edge">
-<title>search_traffic&#45;&gt;mu_sales</title>
-<path fill="none" stroke="black" d="M226.41,-279.73C223.22,-266.55 219.67,-251.88 216.48,-238.72"/>
-<polygon fill="black" stroke="black" points="219.91,-237.99 214.15,-229.1 213.1,-239.64 219.91,-237.99"/>
 </g>
 <!-- beta_sales -->
 <g id="node8" class="node">
@@ -141,8 +141,22 @@
 <path fill="none" stroke="black" d="M445.57,-284.15C434.96,-270.73 421.35,-256.43 405.98,-247.13 362.5,-220.83 305.48,-209.04 263.62,-203.76"/>
 <polygon fill="black" stroke="black" points="264.08,-200.29 253.75,-202.61 263.27,-207.24 264.08,-200.29"/>
 </g>
-<!-- sigma_sales -->
+<!-- sigma_search_traffic -->
 <g id="node9" class="node">
+<title>sigma_search_traffic</title>
+<ellipse fill="none" stroke="black" cx="501.98" cy="-437.61" rx="91.92" ry="40.66"/>
+<text text-anchor="middle" x="501.98" y="-449.06" font-family="Times,serif" font-size="14.00">sigma_search_traffic</text>
+<text text-anchor="middle" x="501.98" y="-432.56" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="501.98" y="-416.06" font-family="Times,serif" font-size="14.00">Halfnormal</text>
+</g>
+<!-- sigma_search_traffic&#45;&gt;search_traffic -->
+<g id="edge1" class="edge">
+<title>sigma_search_traffic&#45;&gt;search_traffic</title>
+<path fill="none" stroke="black" d="M436.77,-408.54C426.54,-404.46 416.03,-400.46 405.98,-396.95 363.63,-382.14 349.77,-387.65 308.98,-368.95 301.7,-365.61 294.31,-361.62 287.16,-357.38"/>
+<polygon fill="black" stroke="black" points="289.24,-354.55 278.89,-352.28 285.57,-360.51 289.24,-354.55"/>
+</g>
+<!-- sigma_sales -->
+<g id="node10" class="node">
 <title>sigma_sales</title>
 <ellipse fill="none" stroke="black" cx="57.98" cy="-198.48" rx="57.98" ry="40.66"/>
 <text text-anchor="middle" x="57.98" y="-209.93" font-family="Times,serif" font-size="14.00">sigma_sales</text>
@@ -155,20 +169,6 @@
 <path fill="none" stroke="black" d="M93.7,-166.27C111.42,-150.79 132.85,-132.07 150.99,-116.22"/>
 <polygon fill="black" stroke="black" points="153.24,-118.91 158.46,-109.69 148.63,-113.64 153.24,-118.91"/>
 </g>
-<!-- sigma_search_traffic -->
-<g id="node10" class="node">
-<title>sigma_search_traffic</title>
-<ellipse fill="none" stroke="black" cx="501.98" cy="-437.61" rx="91.92" ry="40.66"/>
-<text text-anchor="middle" x="501.98" y="-449.06" font-family="Times,serif" font-size="14.00">sigma_search_traffic</text>
-<text text-anchor="middle" x="501.98" y="-432.56" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="501.98" y="-416.06" font-family="Times,serif" font-size="14.00">Halfnormal</text>
-</g>
-<!-- sigma_search_traffic&#45;&gt;search_traffic -->
-<g id="edge2" class="edge">
-<title>sigma_search_traffic&#45;&gt;search_traffic</title>
-<path fill="none" stroke="black" d="M436.77,-408.54C426.54,-404.46 416.03,-400.46 405.98,-396.95 363.63,-382.14 349.77,-387.65 308.98,-368.95 301.7,-365.61 294.31,-361.62 287.16,-357.38"/>
-<polygon fill="black" stroke="black" points="289.24,-354.55 278.89,-352.28 285.57,-360.51 289.24,-354.55"/>
-</g>
 <!-- beta_search_traffic -->
 <g id="node11" class="node">
 <title>beta_search_traffic</title>
@@ -180,8 +180,8 @@
 <!-- beta_search_traffic&#45;&gt;mu_search_traffic -->
 <g id="edge10" class="edge">
 <title>beta_search_traffic&#45;&gt;mu_search_traffic</title>
-<path fill="none" stroke="black" d="M462.1,-523.3C445.62,-510.21 425.76,-496.14 405.98,-486.27 375.81,-471.21 340.08,-460.15 309.61,-452.5"/>
-<polygon fill="black" stroke="black" points="310.65,-449.16 300.11,-450.2 309,-455.96 310.65,-449.16"/>
+<path fill="none" stroke="black" d="M462.03,-523.44C445.54,-510.36 425.69,-496.27 405.98,-486.27 378.4,-472.27 345.97,-461.57 317.77,-453.89"/>
+<polygon fill="black" stroke="black" points="318.81,-450.55 308.24,-451.38 317.02,-457.32 318.81,-450.55"/>
 </g>
 </g>
 </svg>

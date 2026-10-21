@@ -284,7 +284,7 @@ pm.model_to_graphviz(model.pymc_model)
 
 ## Sample
 
-This fit pins `nuts_sampler="nutpie"` and a shorter run, which is the sampler that produced the published sample. Unit intercepts and slopes are sampled as a unit-normal offset; the summary reports the centered effects.
+This fit pins `nuts_sampler="nutpie"` and a shorter run, which is the sampler that produced the published sample. Unit intercepts and slopes are sampled as a unit-normal offset, so the summary below leads with the free `*_offset` rows. Those offset rows are not the centered slopes; the centered slopes are Deterministics and this truncation omits them.
 
 ```{python}
 idata = model.fit(
@@ -299,6 +299,8 @@ idata = model.fit(
 ## Results
 
 ### Population-level coefficients
+
+The table below leads with the free `slope_demand_price_offset` rows. Those are not the centered slopes.
 
 ```{python}
 model.summary()

@@ -23,97 +23,97 @@
 <path fill="none" stroke="black" d="M996,-247.13C996,-247.13 1114,-247.13 1114,-247.13 1120,-247.13 1126,-253.13 1126,-259.13 1126,-259.13 1126,-356.95 1126,-356.95 1126,-362.95 1120,-368.95 1114,-368.95 1114,-368.95 996,-368.95 996,-368.95 990,-368.95 984,-362.95 984,-356.95 984,-356.95 984,-259.13 984,-259.13 984,-253.13 990,-247.13 996,-247.13"/>
 <text text-anchor="middle" x="1056.12" y="-254.33" font-family="Times,serif" font-size="14.00">demand_predictors (5)</text>
 </g>
-<!-- trend -->
+<!-- _do_intervene_demand -->
 <g id="node1" class="node">
-<title>trend</title>
-<path fill="lightgrey" stroke="black" d="M492,-349.04C492,-349.04 462,-349.04 462,-349.04 456,-349.04 450,-343.04 450,-337.04 450,-337.04 450,-303.54 450,-303.54 450,-297.54 456,-291.54 462,-291.54 462,-291.54 492,-291.54 492,-291.54 498,-291.54 504,-297.54 504,-303.54 504,-303.54 504,-337.04 504,-337.04 504,-343.04 498,-349.04 492,-349.04"/>
-<text text-anchor="middle" x="477" y="-331.74" font-family="Times,serif" font-size="14.00">trend</text>
-<text text-anchor="middle" x="477" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="477" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
+<title>_do_intervene_demand</title>
+<path fill="lightgrey" stroke="black" d="M491.75,-349.04C491.75,-349.04 372.25,-349.04 372.25,-349.04 366.25,-349.04 360.25,-343.04 360.25,-337.04 360.25,-337.04 360.25,-303.54 360.25,-303.54 360.25,-297.54 366.25,-291.54 372.25,-291.54 372.25,-291.54 491.75,-291.54 491.75,-291.54 497.75,-291.54 503.75,-297.54 503.75,-303.54 503.75,-303.54 503.75,-337.04 503.75,-337.04 503.75,-343.04 497.75,-349.04 491.75,-349.04"/>
+<text text-anchor="middle" x="432" y="-331.74" font-family="Times,serif" font-size="14.00">_do_intervene_demand</text>
+<text text-anchor="middle" x="432" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="432" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
 </g>
 <!-- mu_demand -->
-<g id="node3" class="node">
+<g id="node6" class="node">
 <title>mu_demand</title>
-<polygon fill="none" stroke="black" points="503.12,-227.23 412.88,-227.23 412.88,-169.73 503.12,-169.73 503.12,-227.23"/>
-<text text-anchor="middle" x="458" y="-209.93" font-family="Times,serif" font-size="14.00">mu_demand</text>
-<text text-anchor="middle" x="458" y="-193.43" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="458" y="-176.93" font-family="Times,serif" font-size="14.00">Deterministic</text>
-</g>
-<!-- trend&#45;&gt;mu_demand -->
-<g id="edge2" class="edge">
-<title>trend&#45;&gt;mu_demand</title>
-<path fill="none" stroke="black" d="M472.55,-291.2C470.07,-275.58 466.95,-255.89 464.23,-238.76"/>
-<polygon fill="black" stroke="black" points="467.69,-238.22 462.66,-228.89 460.77,-239.31 467.69,-238.22"/>
-</g>
-<!-- price -->
-<g id="node2" class="node">
-<title>price</title>
-<path fill="lightgrey" stroke="black" d="M58,-349.04C58,-349.04 28,-349.04 28,-349.04 22,-349.04 16,-343.04 16,-337.04 16,-337.04 16,-303.54 16,-303.54 16,-297.54 22,-291.54 28,-291.54 28,-291.54 58,-291.54 58,-291.54 64,-291.54 70,-297.54 70,-303.54 70,-303.54 70,-337.04 70,-337.04 70,-343.04 64,-349.04 58,-349.04"/>
-<text text-anchor="middle" x="43" y="-331.74" font-family="Times,serif" font-size="14.00">price</text>
-<text text-anchor="middle" x="43" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="43" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
-</g>
-<!-- price&#45;&gt;mu_demand -->
-<g id="edge4" class="edge">
-<title>price&#45;&gt;mu_demand</title>
-<path fill="none" stroke="black" d="M49.91,-291.35C55.24,-275.82 64.27,-257.58 79,-247.13 129.59,-211.28 308.5,-202.38 401.27,-200.18"/>
-<polygon fill="black" stroke="black" points="401.25,-203.68 411.17,-199.97 401.1,-196.69 401.25,-203.68"/>
-</g>
-<!-- demand -->
-<g id="node5" class="node">
-<title>demand</title>
-<ellipse fill="lightgrey" stroke="black" cx="460" cy="-81.16" rx="42.07" ry="40.66"/>
-<text text-anchor="middle" x="460" y="-92.61" font-family="Times,serif" font-size="14.00">demand</text>
-<text text-anchor="middle" x="460" y="-76.11" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="460" y="-59.61" font-family="Times,serif" font-size="14.00">Normal</text>
-</g>
-<!-- mu_demand&#45;&gt;demand -->
-<g id="edge15" class="edge">
-<title>mu_demand&#45;&gt;demand</title>
-<path fill="none" stroke="black" d="M458.49,-169.27C458.68,-158.44 458.9,-145.73 459.11,-133.41"/>
-<polygon fill="black" stroke="black" points="462.6,-133.84 459.28,-123.78 455.61,-133.72 462.6,-133.84"/>
-</g>
-<!-- _do_intervene_demand -->
-<g id="node4" class="node">
-<title>_do_intervene_demand</title>
-<path fill="lightgrey" stroke="black" d="M219.75,-349.04C219.75,-349.04 100.25,-349.04 100.25,-349.04 94.25,-349.04 88.25,-343.04 88.25,-337.04 88.25,-337.04 88.25,-303.54 88.25,-303.54 88.25,-297.54 94.25,-291.54 100.25,-291.54 100.25,-291.54 219.75,-291.54 219.75,-291.54 225.75,-291.54 231.75,-297.54 231.75,-303.54 231.75,-303.54 231.75,-337.04 231.75,-337.04 231.75,-343.04 225.75,-349.04 219.75,-349.04"/>
-<text text-anchor="middle" x="160" y="-331.74" font-family="Times,serif" font-size="14.00">_do_intervene_demand</text>
-<text text-anchor="middle" x="160" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="160" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
+<polygon fill="none" stroke="black" points="477.12,-227.23 386.88,-227.23 386.88,-169.73 477.12,-169.73 477.12,-227.23"/>
+<text text-anchor="middle" x="432" y="-209.93" font-family="Times,serif" font-size="14.00">mu_demand</text>
+<text text-anchor="middle" x="432" y="-193.43" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="432" y="-176.93" font-family="Times,serif" font-size="14.00">Deterministic</text>
 </g>
 <!-- _do_intervene_demand&#45;&gt;mu_demand -->
-<g id="edge5" class="edge">
+<g id="edge2" class="edge">
 <title>_do_intervene_demand&#45;&gt;mu_demand</title>
-<path fill="none" stroke="black" d="M184.75,-291.07C199.6,-275.85 219.7,-258.01 241,-247.13 291.57,-221.32 355.72,-209.44 401.12,-204"/>
-<polygon fill="black" stroke="black" points="401.48,-207.48 411.03,-202.89 400.7,-200.52 401.48,-207.48"/>
-</g>
-<!-- season -->
-<g id="node6" class="node">
-<title>season</title>
-<path fill="lightgrey" stroke="black" d="M292,-349.04C292,-349.04 262,-349.04 262,-349.04 256,-349.04 250,-343.04 250,-337.04 250,-337.04 250,-303.54 250,-303.54 250,-297.54 256,-291.54 262,-291.54 262,-291.54 292,-291.54 292,-291.54 298,-291.54 304,-297.54 304,-303.54 304,-303.54 304,-337.04 304,-337.04 304,-343.04 298,-349.04 292,-349.04"/>
-<text text-anchor="middle" x="277" y="-331.74" font-family="Times,serif" font-size="14.00">season</text>
-<text text-anchor="middle" x="277" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="277" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
-</g>
-<!-- season&#45;&gt;mu_demand -->
-<g id="edge6" class="edge">
-<title>season&#45;&gt;mu_demand</title>
-<path fill="none" stroke="black" d="M285.51,-291.3C291.35,-276.34 300.53,-258.67 314,-247.13 338.54,-226.11 372.64,-214.29 401.5,-207.69"/>
-<polygon fill="black" stroke="black" points="402.14,-211.13 411.2,-205.63 400.69,-204.28 402.14,-211.13"/>
+<path fill="none" stroke="black" d="M432,-291.2C432,-275.58 432,-255.89 432,-238.76"/>
+<polygon fill="black" stroke="black" points="435.5,-238.91 432,-228.91 428.5,-238.91 435.5,-238.91"/>
 </g>
 <!-- competitor_price -->
-<g id="node7" class="node">
+<g id="node2" class="node">
 <title>competitor_price</title>
-<path fill="lightgrey" stroke="black" d="M419.5,-349.04C419.5,-349.04 334.5,-349.04 334.5,-349.04 328.5,-349.04 322.5,-343.04 322.5,-337.04 322.5,-337.04 322.5,-303.54 322.5,-303.54 322.5,-297.54 328.5,-291.54 334.5,-291.54 334.5,-291.54 419.5,-291.54 419.5,-291.54 425.5,-291.54 431.5,-297.54 431.5,-303.54 431.5,-303.54 431.5,-337.04 431.5,-337.04 431.5,-343.04 425.5,-349.04 419.5,-349.04"/>
-<text text-anchor="middle" x="377" y="-331.74" font-family="Times,serif" font-size="14.00">competitor_price</text>
-<text text-anchor="middle" x="377" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="377" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
+<path fill="lightgrey" stroke="black" d="M113.5,-349.04C113.5,-349.04 28.5,-349.04 28.5,-349.04 22.5,-349.04 16.5,-343.04 16.5,-337.04 16.5,-337.04 16.5,-303.54 16.5,-303.54 16.5,-297.54 22.5,-291.54 28.5,-291.54 28.5,-291.54 113.5,-291.54 113.5,-291.54 119.5,-291.54 125.5,-297.54 125.5,-303.54 125.5,-303.54 125.5,-337.04 125.5,-337.04 125.5,-343.04 119.5,-349.04 113.5,-349.04"/>
+<text text-anchor="middle" x="71" y="-331.74" font-family="Times,serif" font-size="14.00">competitor_price</text>
+<text text-anchor="middle" x="71" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="71" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
 </g>
 <!-- competitor_price&#45;&gt;mu_demand -->
-<g id="edge7" class="edge">
+<g id="edge3" class="edge">
 <title>competitor_price&#45;&gt;mu_demand</title>
-<path fill="none" stroke="black" d="M395.99,-291.2C406.96,-274.98 420.89,-254.37 432.77,-236.79"/>
-<polygon fill="black" stroke="black" points="435.58,-238.89 438.28,-228.65 429.78,-234.97 435.58,-238.89"/>
+<path fill="none" stroke="black" d="M88.65,-291.31C99.96,-275.77 116.07,-257.53 135,-247.13 175.38,-224.96 301.19,-210.71 375.48,-204"/>
+<polygon fill="black" stroke="black" points="375.33,-207.53 384.98,-203.16 374.72,-200.55 375.33,-207.53"/>
+</g>
+<!-- trend -->
+<g id="node3" class="node">
+<title>trend</title>
+<path fill="lightgrey" stroke="black" d="M186,-349.04C186,-349.04 156,-349.04 156,-349.04 150,-349.04 144,-343.04 144,-337.04 144,-337.04 144,-303.54 144,-303.54 144,-297.54 150,-291.54 156,-291.54 156,-291.54 186,-291.54 186,-291.54 192,-291.54 198,-297.54 198,-303.54 198,-303.54 198,-337.04 198,-337.04 198,-343.04 192,-349.04 186,-349.04"/>
+<text text-anchor="middle" x="171" y="-331.74" font-family="Times,serif" font-size="14.00">trend</text>
+<text text-anchor="middle" x="171" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="171" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
+</g>
+<!-- trend&#45;&gt;mu_demand -->
+<g id="edge4" class="edge">
+<title>trend&#45;&gt;mu_demand</title>
+<path fill="none" stroke="black" d="M178.5,-291.08C183.97,-275.86 192.94,-258.01 207,-247.13 232.83,-227.15 317.53,-213.25 375.31,-205.81"/>
+<polygon fill="black" stroke="black" points="375.5,-209.32 384.98,-204.6 374.63,-202.37 375.5,-209.32"/>
+</g>
+<!-- season -->
+<g id="node4" class="node">
+<title>season</title>
+<path fill="lightgrey" stroke="black" d="M258,-349.04C258,-349.04 228,-349.04 228,-349.04 222,-349.04 216,-343.04 216,-337.04 216,-337.04 216,-303.54 216,-303.54 216,-297.54 222,-291.54 228,-291.54 228,-291.54 258,-291.54 258,-291.54 264,-291.54 270,-297.54 270,-303.54 270,-303.54 270,-337.04 270,-337.04 270,-343.04 264,-349.04 258,-349.04"/>
+<text text-anchor="middle" x="243" y="-331.74" font-family="Times,serif" font-size="14.00">season</text>
+<text text-anchor="middle" x="243" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="243" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
+</g>
+<!-- season&#45;&gt;mu_demand -->
+<g id="edge5" class="edge">
+<title>season&#45;&gt;mu_demand</title>
+<path fill="none" stroke="black" d="M251.03,-291.21C256.63,-276.22 265.57,-258.57 279,-247.13 305.99,-224.17 343.99,-212.26 375.37,-206.09"/>
+<polygon fill="black" stroke="black" points="375.89,-209.55 385.11,-204.33 374.64,-202.66 375.89,-209.55"/>
+</g>
+<!-- price -->
+<g id="node5" class="node">
+<title>price</title>
+<path fill="lightgrey" stroke="black" d="M330,-349.04C330,-349.04 300,-349.04 300,-349.04 294,-349.04 288,-343.04 288,-337.04 288,-337.04 288,-303.54 288,-303.54 288,-297.54 294,-291.54 300,-291.54 300,-291.54 330,-291.54 330,-291.54 336,-291.54 342,-297.54 342,-303.54 342,-303.54 342,-337.04 342,-337.04 342,-343.04 336,-349.04 330,-349.04"/>
+<text text-anchor="middle" x="315" y="-331.74" font-family="Times,serif" font-size="14.00">price</text>
+<text text-anchor="middle" x="315" y="-315.24" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="315" y="-298.74" font-family="Times,serif" font-size="14.00">Data</text>
+</g>
+<!-- price&#45;&gt;mu_demand -->
+<g id="edge6" class="edge">
+<title>price&#45;&gt;mu_demand</title>
+<path fill="none" stroke="black" d="M324.54,-291.3C330.48,-276.87 339.25,-259.72 351,-247.13 358.44,-239.17 367.51,-232.11 376.85,-226.04"/>
+<polygon fill="black" stroke="black" points="378.63,-229.05 385.34,-220.85 374.98,-223.08 378.63,-229.05"/>
+</g>
+<!-- demand -->
+<g id="node7" class="node">
+<title>demand</title>
+<ellipse fill="lightgrey" stroke="black" cx="447" cy="-81.16" rx="42.07" ry="40.66"/>
+<text text-anchor="middle" x="447" y="-92.61" font-family="Times,serif" font-size="14.00">demand</text>
+<text text-anchor="middle" x="447" y="-76.11" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="447" y="-59.61" font-family="Times,serif" font-size="14.00">Normal</text>
+</g>
+<!-- mu_demand&#45;&gt;demand -->
+<g id="edge16" class="edge">
+<title>mu_demand&#45;&gt;demand</title>
+<path fill="none" stroke="black" d="M435.67,-169.27C437.09,-158.34 438.76,-145.49 440.38,-133.06"/>
+<polygon fill="black" stroke="black" points="443.82,-133.7 441.64,-123.33 436.88,-132.8 443.82,-133.7"/>
 </g>
 <!-- mu_alpha_demand -->
 <g id="node8" class="node">
@@ -124,7 +124,7 @@
 <text text-anchor="middle" x="1071" y="-416.06" font-family="Times,serif" font-size="14.00">Normal</text>
 </g>
 <!-- alpha_demand -->
-<g id="node17" class="node">
+<g id="node15" class="node">
 <title>alpha_demand</title>
 <polygon fill="none" stroke="black" points="731.75,-349.04 636.25,-349.04 636.25,-291.54 731.75,-291.54 731.75,-349.04"/>
 <text text-anchor="middle" x="684" y="-331.74" font-family="Times,serif" font-size="14.00">alpha_demand</text>
@@ -145,36 +145,22 @@
 <text text-anchor="middle" x="1939" y="-432.56" font-family="Times,serif" font-size="14.00">~</text>
 <text text-anchor="middle" x="1939" y="-416.06" font-family="Times,serif" font-size="14.00">Data</text>
 </g>
-<!-- sigma_alpha_demand -->
-<g id="node10" class="node">
-<title>sigma_alpha_demand</title>
-<ellipse fill="none" stroke="black" cx="1270" cy="-437.61" rx="95.64" ry="40.66"/>
-<text text-anchor="middle" x="1270" y="-449.06" font-family="Times,serif" font-size="14.00">sigma_alpha_demand</text>
-<text text-anchor="middle" x="1270" y="-432.56" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="1270" y="-416.06" font-family="Times,serif" font-size="14.00">Halfnormal</text>
-</g>
-<!-- sigma_alpha_demand&#45;&gt;alpha_demand -->
-<g id="edge14" class="edge">
-<title>sigma_alpha_demand&#45;&gt;alpha_demand</title>
-<path fill="none" stroke="black" d="M1203.08,-408.12C1190.61,-403.74 1177.55,-399.75 1165,-396.95 1007.93,-361.95 960.77,-405.28 804,-368.95 783.36,-364.17 761.61,-356.42 742.38,-348.55"/>
-<polygon fill="black" stroke="black" points="743.95,-345.42 733.37,-344.77 741.24,-351.87 743.95,-345.42"/>
-</g>
 <!-- sigma_demand -->
-<g id="node11" class="node">
+<g id="node10" class="node">
 <title>sigma_demand</title>
-<ellipse fill="none" stroke="black" cx="591" cy="-198.48" rx="70.18" ry="40.66"/>
-<text text-anchor="middle" x="591" y="-209.93" font-family="Times,serif" font-size="14.00">sigma_demand</text>
-<text text-anchor="middle" x="591" y="-193.43" font-family="Times,serif" font-size="14.00">~</text>
-<text text-anchor="middle" x="591" y="-176.93" font-family="Times,serif" font-size="14.00">Halfnormal</text>
+<ellipse fill="none" stroke="black" cx="590" cy="-198.48" rx="70.18" ry="40.66"/>
+<text text-anchor="middle" x="590" y="-209.93" font-family="Times,serif" font-size="14.00">sigma_demand</text>
+<text text-anchor="middle" x="590" y="-193.43" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="590" y="-176.93" font-family="Times,serif" font-size="14.00">Halfnormal</text>
 </g>
 <!-- sigma_demand&#45;&gt;demand -->
-<g id="edge16" class="edge">
+<g id="edge15" class="edge">
 <title>sigma_demand&#45;&gt;demand</title>
-<path fill="none" stroke="black" d="M553.11,-164.12C536.25,-149.28 516.4,-131.81 499.38,-116.82"/>
-<polygon fill="black" stroke="black" points="501.71,-114.21 491.89,-110.23 497.09,-119.47 501.71,-114.21"/>
+<path fill="none" stroke="black" d="M549.79,-165.05C530.39,-149.4 507.16,-130.68 487.7,-114.98"/>
+<polygon fill="black" stroke="black" points="489.93,-112.28 479.95,-108.73 485.54,-117.73 489.93,-112.28"/>
 </g>
 <!-- mu_slope_demand_price -->
-<g id="node12" class="node">
+<g id="node11" class="node">
 <title>mu_slope_demand_price</title>
 <ellipse fill="none" stroke="black" cx="1492" cy="-437.61" rx="108.36" ry="40.66"/>
 <text text-anchor="middle" x="1492" y="-449.06" font-family="Times,serif" font-size="14.00">mu_slope_demand_price</text>
@@ -182,7 +168,7 @@
 <text text-anchor="middle" x="1492" y="-416.06" font-family="Times,serif" font-size="14.00">Normal</text>
 </g>
 <!-- slope_demand_price -->
-<g id="node15" class="node">
+<g id="node17" class="node">
 <title>slope_demand_price</title>
 <polygon fill="none" stroke="black" points="941.25,-349.04 812.75,-349.04 812.75,-291.54 941.25,-291.54 941.25,-349.04"/>
 <text text-anchor="middle" x="877" y="-331.74" font-family="Times,serif" font-size="14.00">slope_demand_price</text>
@@ -190,10 +176,24 @@
 <text text-anchor="middle" x="877" y="-298.74" font-family="Times,serif" font-size="14.00">Deterministic</text>
 </g>
 <!-- mu_slope_demand_price&#45;&gt;slope_demand_price -->
-<g id="edge10" class="edge">
+<g id="edge9" class="edge">
 <title>mu_slope_demand_price&#45;&gt;slope_demand_price</title>
 <path fill="none" stroke="black" d="M1416.62,-407.92C1402.94,-403.62 1388.67,-399.7 1375,-396.95 1202.47,-362.2 1150.43,-412.85 980,-368.95 966.22,-365.4 952.03,-360.07 938.74,-354.23"/>
 <polygon fill="black" stroke="black" points="940.23,-351.07 929.68,-350.1 937.33,-357.43 940.23,-351.07"/>
+</g>
+<!-- sigma_alpha_demand -->
+<g id="node12" class="node">
+<title>sigma_alpha_demand</title>
+<ellipse fill="none" stroke="black" cx="1270" cy="-437.61" rx="95.64" ry="40.66"/>
+<text text-anchor="middle" x="1270" y="-449.06" font-family="Times,serif" font-size="14.00">sigma_alpha_demand</text>
+<text text-anchor="middle" x="1270" y="-432.56" font-family="Times,serif" font-size="14.00">~</text>
+<text text-anchor="middle" x="1270" y="-416.06" font-family="Times,serif" font-size="14.00">Halfnormal</text>
+</g>
+<!-- sigma_alpha_demand&#45;&gt;alpha_demand -->
+<g id="edge13" class="edge">
+<title>sigma_alpha_demand&#45;&gt;alpha_demand</title>
+<path fill="none" stroke="black" d="M1203.08,-408.12C1190.61,-403.74 1177.55,-399.75 1165,-396.95 1007.93,-361.95 960.77,-405.28 804,-368.95 783.36,-364.17 761.61,-356.42 742.38,-348.55"/>
+<polygon fill="black" stroke="black" points="743.95,-345.42 733.37,-344.77 741.24,-351.87 743.95,-345.42"/>
 </g>
 <!-- sigma_slope_demand_price -->
 <g id="node13" class="node">
@@ -204,7 +204,7 @@
 <text text-anchor="middle" x="1737" y="-416.06" font-family="Times,serif" font-size="14.00">Halfnormal</text>
 </g>
 <!-- sigma_slope_demand_price&#45;&gt;slope_demand_price -->
-<g id="edge9" class="edge">
+<g id="edge11" class="edge">
 <title>sigma_slope_demand_price&#45;&gt;slope_demand_price</title>
 <path fill="none" stroke="black" d="M1654.79,-407.76C1639.72,-403.44 1624.01,-399.57 1609,-396.95 1333.32,-348.93 1251.88,-435.18 980,-368.95 965.89,-365.51 951.36,-360.11 937.84,-354.15"/>
 <polygon fill="black" stroke="black" points="939.63,-351.12 929.08,-350.13 936.71,-357.48 939.63,-351.12"/>
@@ -218,16 +218,16 @@
 <text text-anchor="middle" x="622" y="-416.06" font-family="Times,serif" font-size="14.00">Normal</text>
 </g>
 <!-- alpha_demand_offset&#45;&gt;alpha_demand -->
-<g id="edge13" class="edge">
+<g id="edge14" class="edge">
 <title>alpha_demand_offset&#45;&gt;alpha_demand</title>
 <path fill="none" stroke="black" d="M642.99,-397.57C649.63,-385.22 656.96,-371.59 663.56,-359.3"/>
 <polygon fill="black" stroke="black" points="666.54,-361.16 668.19,-350.7 660.37,-357.85 666.54,-361.16"/>
 </g>
-<!-- slope_demand_price&#45;&gt;mu_demand -->
+<!-- alpha_demand&#45;&gt;mu_demand -->
 <g id="edge1" class="edge">
-<title>slope_demand_price&#45;&gt;mu_demand</title>
-<path fill="none" stroke="black" d="M835.88,-291.14C809.91,-275.01 774.95,-256.22 741,-247.13 691.81,-233.98 560.1,-255.84 512,-239.13 507.79,-237.67 503.64,-235.76 499.61,-233.57"/>
-<polygon fill="black" stroke="black" points="501.56,-230.66 491.21,-228.42 497.9,-236.63 501.56,-230.66"/>
+<title>alpha_demand&#45;&gt;mu_demand</title>
+<path fill="none" stroke="black" d="M636.08,-297.58C601.25,-281.68 553.04,-259.42 511,-239.13 503.41,-235.47 495.44,-231.55 487.6,-227.66"/>
+<polygon fill="black" stroke="black" points="489.28,-224.59 478.77,-223.26 486.15,-230.85 489.28,-224.59"/>
 </g>
 <!-- slope_demand_price_offset -->
 <g id="node16" class="node">
@@ -238,16 +238,16 @@
 <text text-anchor="middle" x="851" y="-416.06" font-family="Times,serif" font-size="14.00">Normal</text>
 </g>
 <!-- slope_demand_price_offset&#45;&gt;slope_demand_price -->
-<g id="edge11" class="edge">
+<g id="edge10" class="edge">
 <title>slope_demand_price_offset&#45;&gt;slope_demand_price</title>
 <path fill="none" stroke="black" d="M860.02,-396.6C862.66,-384.89 865.54,-372.11 868.17,-360.45"/>
 <polygon fill="black" stroke="black" points="871.58,-361.26 870.36,-350.73 864.75,-359.72 871.58,-361.26"/>
 </g>
-<!-- alpha_demand&#45;&gt;mu_demand -->
+<!-- slope_demand_price&#45;&gt;mu_demand -->
 <g id="edge8" class="edge">
-<title>alpha_demand&#45;&gt;mu_demand</title>
-<path fill="none" stroke="black" d="M636,-299.95C600.77,-285.03 552.25,-262.98 512,-239.13 509.23,-237.5 506.43,-235.75 503.64,-233.93"/>
-<polygon fill="black" stroke="black" points="505.73,-231.12 495.48,-228.42 501.81,-236.92 505.73,-231.12"/>
+<title>slope_demand_price&#45;&gt;mu_demand</title>
+<path fill="none" stroke="black" d="M835.88,-291.14C809.91,-275.01 774.96,-256.21 741,-247.13 691.59,-233.92 560.55,-251.79 511,-239.13 503.32,-237.17 495.52,-234.39 487.97,-231.19"/>
+<polygon fill="black" stroke="black" points="489.42,-228.01 478.86,-227.07 486.53,-234.38 489.42,-228.01"/>
 </g>
 <!-- beta_demand -->
 <g id="node18" class="node">
@@ -258,10 +258,10 @@
 <text text-anchor="middle" x="1055" y="-298.74" font-family="Times,serif" font-size="14.00">Normal</text>
 </g>
 <!-- beta_demand&#45;&gt;mu_demand -->
-<g id="edge3" class="edge">
+<g id="edge7" class="edge">
 <title>beta_demand&#45;&gt;mu_demand</title>
-<path fill="none" stroke="black" d="M1027.92,-283.44C1015.1,-269.37 998.54,-254.79 980,-247.13 931.93,-227.29 561.28,-255.75 512,-239.13 507.6,-237.65 503.26,-235.66 499.06,-233.37"/>
-<polygon fill="black" stroke="black" points="501.22,-230.59 490.87,-228.33 497.56,-236.55 501.22,-230.59"/>
+<path fill="none" stroke="black" d="M1027.92,-283.44C1015.1,-269.37 998.54,-254.79 980,-247.13 955.91,-237.19 536.31,-245.36 511,-239.13 503.3,-237.24 495.49,-234.5 487.93,-231.32"/>
+<polygon fill="black" stroke="black" points="489.38,-228.14 478.83,-227.22 486.5,-234.52 489.38,-228.14"/>
 </g>
 </g>
 </svg>
