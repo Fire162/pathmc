@@ -46,10 +46,10 @@ https://arxiv.org/abs/2305.09565
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import permutations
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import narwhals.stable.v1 as nw
 import networkx as nx
@@ -63,6 +63,7 @@ from pathmc._ci_report import (
     warn_conditioning_rank_collapse,
     written_counts,
 )
+from pathmc._types import BinsLike, validate_bins
 from pathmc.graph import GraphInfo
 from pathmc.reprs import ResultReprMixin
 
@@ -452,7 +453,7 @@ class FalsificationResult(ResultReprMixin):
     def plot(
         self,
         ax: matplotlib.axes.Axes | None = None,
-        bins: int | str | Sequence[float] | np.ndarray | None = None,
+        bins: BinsLike | None = None,
     ) -> matplotlib.figure.Figure:
         """Plot histograms of permuted-baseline violation fractions.
 
@@ -465,7 +466,7 @@ class FalsificationResult(ResultReprMixin):
         ----------
         ax : matplotlib.axes.Axes | None
             Axes to plot on. Creates a new figure if ``None``.
-        bins : int | str | Sequence[float] | numpy.ndarray | None
+        bins : BinsLike | None
             Passed through to ``matplotlib.axes.Axes.hist``: a positive
             integer bin count, a binning strategy name such as
             ``"auto"``, or a sequence of bin edges. Defaults to an
@@ -502,19 +503,7 @@ class FalsificationResult(ResultReprMixin):
                 "The DAG implies no testable conditional independences."
             )
 
-        # Only the bin count is validated. A strategy name or an edge
-        # sequence is left to matplotlib, which reports both more precisely.
-        if bins is not None:
-            if isinstance(bins, bool) or not isinstance(
-                bins, (int, np.integer, Sequence, np.ndarray)
-            ):
-                raise ValueError(
-                    f"bins must be a positive integer, a binning strategy "
-                    f"name, a sequence of bin edges, or None, got {bins!r} "
-                    f"of type {type(bins).__name__}."
-                )
-            if isinstance(bins, (int, np.integer)) and bins < 1:
-                raise ValueError(f"bins must be a positive integer, got {bins}.")
+        hist_bins: Any = validate_bins(bins)
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(8, 4))
@@ -524,10 +513,13 @@ class FalsificationResult(ResultReprMixin):
             fig = cast("matplotlib.figure.Figure", ax.get_figure())
 
         lmc_fractions = self.perm_lmc_violation_fractions
+        plot_bins = (
+            hist_bins.tolist() if isinstance(hist_bins, np.ndarray) else hist_bins
+        )
         if len(lmc_fractions) == 0:
             ax.hist(
                 self.perm_tpa_violation_fractions,
-                bins=bins,
+                bins=plot_bins,
                 alpha=0.5,
                 color="tab:orange",
                 edgecolor="k",
@@ -536,7 +528,7 @@ class FalsificationResult(ResultReprMixin):
         else:
             ax.hist(
                 [lmc_fractions, self.perm_tpa_violation_fractions],
-                bins=bins,
+                bins=plot_bins,
                 alpha=0.5,
                 color=["tab:blue", "tab:orange"],
                 edgecolor="k",
