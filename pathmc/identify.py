@@ -29,8 +29,9 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 
-from pathmc._ci import CIResult, partial_correlation_ci, stack_blocks, variable_blocks
+from pathmc._ci import CIResult, named_column_ci
 from pathmc._ci_report import (
+    collapse_statement,
     n_rank_collapsed,
     rank_collapse_note,
     row_is_rank_collapsed,
@@ -539,7 +540,8 @@ class ImplicationTestResult(ResultReprMixin):
         ``n_obs - effective_k - 2``; a block test reports Rao's denominator
         degrees of freedom. ``effective_k`` and ``df`` are missing when the
         test was skipped. ``rank_collapsed`` is true when an executed test
-        used fewer conditioning columns than requested, and false on a skip.
+        used fewer conditioning columns than requested, or a named
+        conditioner contributed no columns. False on a skip.
         A collapsed row did not test the independence that was requested,
         so ``n_violations`` and ``violations`` exclude it.
     alpha : float
@@ -664,23 +666,6 @@ class ImplicationTestResult(ResultReprMixin):
         return header + table
 
 
-def _implication_collapse_labels(frame: pd.DataFrame) -> list[str]:
-    """Labels for executed implication rows whose conditioning set collapsed."""
-    if frame.empty or "rank_collapsed" not in frame.columns:
-        return []
-    collapsed = frame.loc[frame["rank_collapsed"].fillna(False).astype(bool)]
-    labels: list[str] = []
-    for _, row in collapsed.iterrows():
-        conditioning = row["conditioning_set"]
-        given = f" | {{{conditioning}}}" if conditioning else ""
-        labels.append(
-            f"{row['x']} ⊥⊥ {row['y']}{given} "
-            f"(requested {int(row['requested_k'])}, "
-            f"effective_k {int(row['effective_k'])})"
-        )
-    return labels
-
-
 def implied_independences(
     graph_info: GraphInfo,
 ) -> list[ConditionalIndependence]:
@@ -785,10 +770,11 @@ def test_implications(
     Warns
     -----
     UserWarning
-        When an executed row has ``rank_collapsed`` set (a constant,
-        duplicated, or collinear conditioner). The test still runs on the
-        smaller effective set; the p-value is not evidence about the full
-        independence. Drop the redundant variable and re-test.
+        When an executed row has ``rank_collapsed`` set: a constant,
+        duplicated, or collinear conditioner, or a named conditioner that
+        contributed no columns. The test still runs on the columns that
+        entered; the p-value is not evidence about the full independence.
+        Drop the redundant variable and re-test.
 
     Raises
     ------
@@ -796,6 +782,7 @@ def test_implications(
         If required columns are missing from *data*.
     """
     rows: list[dict] = []
+    collapse_labels: list[str] = []
 
     for ci in independences:
         all_vars = {ci.x, ci.y} | set(ci.conditioning_set)
@@ -808,18 +795,20 @@ def test_implications(
             )
 
         z_vars = sorted(ci.conditioning_set)
-        result = _partial_correlation_result(
+        result, dropped = named_column_ci(
             data,
             ci.x,
             ci.y,
             z_vars,
             categorical_vars=categorical_vars,
         )
+        conditioning = ", ".join(z_vars)
         if result.skip_reason is not None:
             r = np.nan
             p = np.nan
             df_value = np.nan
             effective_k = np.nan
+            collapsed = False
         else:
             assert result.r is not None and result.p is not None
             assert result.df is not None and result.effective_k is not None
@@ -827,14 +816,26 @@ def test_implications(
             p = result.p
             df_value = result.df
             effective_k = result.effective_k
+            collapsed = result.rank_collapsed or bool(dropped)
+            if collapsed:
+                collapse_labels.append(
+                    collapse_statement(
+                        ci.x,
+                        ci.y,
+                        conditioning,
+                        result.requested_k,
+                        int(effective_k),
+                        dropped,
+                    )
+                )
 
         rows.append({
             "x": ci.x,
             "y": ci.y,
-            "conditioning_set": ", ".join(z_vars),
+            "conditioning_set": conditioning,
             "requested_k": result.requested_k,
             "effective_k": effective_k,
-            "rank_collapsed": result.rank_collapsed,
+            "rank_collapsed": collapsed,
             "df": df_value,
             "partial_corr": r,
             "p_value": p,
@@ -860,7 +861,7 @@ def test_implications(
                 "significant",
             ]
         )
-    warn_conditioning_rank_collapse(_implication_collapse_labels(df))
+    warn_conditioning_rank_collapse(collapse_labels)
 
     return ImplicationTestResult(results=df, alpha=alpha)
 
@@ -880,8 +881,8 @@ def _partial_correlation_result(
     (string, pandas categorical, or named in *categorical_vars*) enter
     as indicator blocks.
     """
-    blocks = variable_blocks(data, [x, y, *z_vars], categorical_vars)
-    return partial_correlation_ci(blocks[x], blocks[y], stack_blocks(blocks, z_vars))
+    result, _dropped = named_column_ci(data, x, y, z_vars, categorical_vars)
+    return result
 
 
 def _blocks_all_backdoor_paths(

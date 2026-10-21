@@ -58,6 +58,7 @@ import pandas as pd
 
 from pathmc._ci import _PartialCorrelationTester
 from pathmc._ci_report import (
+    collapse_statement,
     n_rank_collapsed,
     warn_conditioning_rank_collapse,
     written_counts,
@@ -150,7 +151,8 @@ class FalsificationResult(ResultReprMixin):
         ``violation``. ``requested_k`` is the number of conditioning
         columns that entered the test. ``effective_k`` is
         ``rank([1, Z]) - 1``. ``rank_collapsed`` is true when that
-        executed test used fewer columns than requested. A collapsed row
+        executed test used fewer columns than requested, or a named
+        conditioner contributed no columns. A collapsed row
         stays in this frame for inspection, but it is excluded from
         ``given_lmc_violations``, ``n_lmc_tests``, ``violations``, and
         the permutation fraction. A permuted DAG that produced no
@@ -611,13 +613,14 @@ def _validate_lmc(
         result = tester.ci_result(node, non_desc, parents)
         if result is None or result.skip_reason is not None or result.p is None:
             continue
+        dropped = tester.dropped_conditioners(parents)
         local.append({
             "node": node,
             "non_descendant": non_desc,
             "conditioning_set": ", ".join(parents),
             "requested_k": result.requested_k,
             "effective_k": result.effective_k,
-            "rank_collapsed": result.rank_collapsed,
+            "rank_collapsed": result.rank_collapsed or bool(dropped),
             "df": result.df,
             "p_value": result.p,
             "violation": result.p <= significance_ci,
@@ -627,18 +630,27 @@ def _validate_lmc(
     return n_tests, n_violations, local
 
 
-def _falsify_collapse_labels(frame: pd.DataFrame) -> list[str]:
+def _falsify_collapse_labels(
+    frame: pd.DataFrame,
+    tester: _PartialCorrelationTester,
+) -> list[str]:
     """Labels for executed LMC rows whose parent set collapsed."""
     if frame.empty or "rank_collapsed" not in frame.columns:
         return []
     collapsed = frame.loc[frame["rank_collapsed"].fillna(False).astype(bool)]
     labels: list[str] = []
     for _, row in collapsed.iterrows():
+        conditioning = str(row["conditioning_set"])
+        names = [part for part in conditioning.split(", ") if part]
         labels.append(
-            f"{row['node']} ⊥⊥ {row['non_descendant']} | "
-            f"{{{row['conditioning_set']}}} "
-            f"(requested {int(row['requested_k'])}, "
-            f"effective_k {int(row['effective_k'])})"
+            collapse_statement(
+                str(row["node"]),
+                str(row["non_descendant"]),
+                conditioning,
+                int(row["requested_k"]),
+                int(row["effective_k"]),
+                tester.dropped_conditioners(names),
+            )
         )
     return labels
 
@@ -786,10 +798,11 @@ def falsify_graph(
     -----
     UserWarning
         When an LMC test on the *given* DAG has ``rank_collapsed`` set.
-        The test still runs at the smaller effective rank; that p-value
-        is not evidence about the full parental independence. Permuted
-        DAGs are not warned about individually. Drop the redundant parent
-        and re-run.
+        That includes a constant, duplicated, or collinear parent, and a
+        named parent that contributed no columns. The test still runs on
+        the columns that entered; that p-value is not evidence about the
+        full parental independence. Permuted DAGs are not warned about
+        individually. Drop the redundant parent and re-run.
 
     Raises
     ------
@@ -865,7 +878,7 @@ def falsify_graph(
         include_unconditional,
     )
     local_df = pd.DataFrame(local) if local else pd.DataFrame(columns=_LOCAL_COLUMNS)
-    warn_conditioning_rank_collapse(_falsify_collapse_labels(local_df))
+    warn_conditioning_rank_collapse(_falsify_collapse_labels(local_df, tester))
     given_fraction = given_violations / given_n_tests if given_n_tests else 0.0
 
     perm_lmc_fractions: list[float] = []

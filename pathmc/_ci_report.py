@@ -22,6 +22,7 @@ independence that was written down.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterable
 
 import pandas as pd
 
@@ -42,6 +43,24 @@ def written_rows(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
     return frame.loc[~rank_collapsed_mask(frame)]
+
+
+def collapse_statement(
+    left: str,
+    right: str,
+    conditioning: str,
+    requested_k: int,
+    effective_k: int,
+    dropped: Iterable[str] = (),
+) -> str:
+    """One warning label for a collapsed written-test row."""
+    given = f" | {{{conditioning}}}" if conditioning else ""
+    names = ", ".join(dropped)
+    note = f"; {names} contributed no columns" if names else ""
+    return (
+        f"{left} ⊥⊥ {right}{given} "
+        f"(requested {int(requested_k)}, effective_k {int(effective_k)}{note})"
+    )
 
 
 def written_counts(frame: pd.DataFrame, flag: str) -> tuple[int, int]:
@@ -101,16 +120,11 @@ def _caller_stacklevel() -> int:
 
 
 def warn_conditioning_rank_collapse(statements: list[str]) -> None:
-    """Warn once that executed CI tests conditioned on a smaller set.
+    """Warn once that executed CI tests did not test the written set.
 
     The engine stays silent. Callers pass labels built from rows whose
-    ``rank_collapsed`` flag is set.
-
-    Parameters
-    ----------
-    statements : list[str]
-        One short label per collapsed row, including ``requested_k`` and
-        ``effective_k``. No warning is emitted when empty.
+    ``rank_collapsed`` flag is set, including a named conditioner that
+    contributed no columns. No warning is emitted when empty.
     """
     if not statements:
         return
@@ -120,11 +134,10 @@ def warn_conditioning_rank_collapse(statements: list[str]) -> None:
     warnings.warn(
         f"Conditioning-set rank collapse in {n_collapsed} "
         f"conditional-independence {noun}: {'; '.join(statements)}. "
-        f"{subject} used fewer linearly independent conditioners than "
-        f"requested, so the p-value is not evidence about the full "
-        f"independence. Drop the constant, duplicated, or collinear "
-        f"conditioner — compare effective_k with requested_k — "
-        f"before reading the result.",
+        f"{subject} did not test the conditioning set that was written "
+        f"down, so the p-value is not evidence about the full "
+        f"independence. Drop the constant, duplicated, collinear, or "
+        f"single-level categorical conditioner before reading the result.",
         UserWarning,
         stacklevel=_caller_stacklevel(),
     )

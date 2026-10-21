@@ -31,8 +31,10 @@ import pytest
 
 import pathmc
 from pathmc._ci import CIResult, partial_correlation_ci
-from pathmc.falsify import _PartialCorrelationTester
-from pathmc.identify import _partial_correlation_result
+from pathmc.falsify import _PartialCorrelationTester, falsify_graph
+from pathmc.graph import build_graph
+from pathmc.identify import ConditionalIndependence, _partial_correlation_result
+from pathmc.parse import parse_spec
 
 # Values recorded from both implementations at aa80e4d (pre-unification).
 # The two implementations agree bitwise on these inputs; the pins use a
@@ -836,3 +838,146 @@ class TestRankCollapseIsVisible:
         assert "rank-collapsed" not in "\n".join(result._summary_lines())
         assert "rank-collapsed" not in result._repr_html_()
         assert "rank-collapsed" not in repr(result)
+
+    def test_single_level_categorical_conditioner_is_not_the_written_test(self):
+        """A named conditioner with no columns is not the written independence."""
+        from pathmc.identify import test_implications
+
+        rng = np.random.default_rng(1)
+        n = 200
+        x = rng.normal(size=n)
+        y = 0.6 * x + rng.normal(scale=0.3, size=n)
+        statement = ConditionalIndependence("x", "y", frozenset({"g"}))
+        categorical = pd.DataFrame({"x": x, "y": y, "g": ["only"] * n})
+        numeric = pd.DataFrame({"x": x, "y": y, "g": np.ones(n)})
+        coded = pd.DataFrame({"x": x, "y": y, "g": np.ones(n, dtype=int)})
+        two_level = pd.DataFrame({
+            "x": x,
+            "y": y,
+            "g": np.array(["a", "b"] * (n // 2)),
+        })
+        cat_data = nw.from_native(categorical, eager_only=True)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            engine = _partial_correlation_result(cat_data, "x", "y", ["g"])
+        assert engine.requested_k == 0
+        assert engine.effective_k == 0
+        assert engine.rank_collapsed is False
+        assert engine.p is not None
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", UserWarning)
+            cat_result = test_implications([statement], cat_data)
+        assert len(caught) == 1
+        assert "g contributed no columns" in str(caught[0].message)
+        row = cat_result.results.iloc[0]
+        assert row["requested_k"] == 0
+        assert row["effective_k"] == 0
+        assert bool(row["rank_collapsed"]) is True
+        assert not np.isnan(row["p_value"])
+        assert cat_result.n_violations == 0
+        assert cat_result.n_tests == 1
+        assert "0 tests, 0 violations, 1 rank-collapsed" in repr(cat_result)
+        html = cat_result._repr_html_()
+        assert "rank-collapsed" in html
+        assert "implied independences violated" not in html
+        assert "All implied independences are consistent" not in html
+
+        with warnings.catch_warnings(record=True) as numeric_caught:
+            warnings.simplefilter("always", UserWarning)
+            num_result = test_implications(
+                [statement], nw.from_native(numeric, eager_only=True)
+            )
+        assert "contributed no columns" not in str(numeric_caught[0].message)
+        assert bool(num_result.results.iloc[0]["rank_collapsed"]) is True
+        assert row["p_value"] == pytest.approx(num_result.results.iloc[0]["p_value"])
+
+        with warnings.catch_warnings(record=True) as coded_caught:
+            warnings.simplefilter("always", UserWarning)
+            coded_result = test_implications(
+                [statement],
+                nw.from_native(coded, eager_only=True),
+                categorical_vars=["g"],
+            )
+        assert "g contributed no columns" in str(coded_caught[0].message)
+        assert bool(coded_result.results.iloc[0]["rank_collapsed"]) is True
+        assert coded_result.results.iloc[0]["requested_k"] == 0
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            two_result = test_implications(
+                [statement], nw.from_native(two_level, eager_only=True)
+            )
+        assert bool(two_result.results.iloc[0]["rank_collapsed"]) is False
+
+        mixed_y = x + 0.05 * rng.normal(size=n)
+        mixed = pd.DataFrame({
+            "x": x,
+            "y": mixed_y,
+            "g": ["only"] * n,
+            "m": rng.normal(size=n),
+        })
+        only_m = ConditionalIndependence("x", "y", frozenset({"m"}))
+        mixed_statement = ConditionalIndependence("x", "y", frozenset({"g", "m"}))
+        mixed_data = nw.from_native(mixed, eager_only=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            m_only = test_implications(
+                [only_m], nw.from_native(mixed.drop(columns="g"), eager_only=True)
+            )
+        assert m_only.n_violations == 1
+        with warnings.catch_warnings(record=True) as mixed_caught:
+            warnings.simplefilter("always", UserWarning)
+            mixed_result = test_implications([mixed_statement], mixed_data)
+        mixed_row = mixed_result.results.iloc[0]
+        assert mixed_row["requested_k"] == 1
+        assert mixed_row["effective_k"] == 1
+        assert bool(mixed_row["rank_collapsed"]) is True
+        assert mixed_result.n_violations == 0
+        assert mixed_row["p_value"] == pytest.approx(m_only.results.iloc[0]["p_value"])
+        assert "g contributed no columns" in str(mixed_caught[0].message)
+
+        graph = build_graph(parse_spec("Y ~ G\nZ ~ G"))
+        cat_frame = pd.DataFrame({
+            "G": ["only"] * n,
+            "Y": y,
+            "Z": y + rng.normal(scale=0.2, size=n),
+        })
+        num_frame = cat_frame.assign(G=np.ones(n))
+        with warnings.catch_warnings(record=True) as falsify_caught:
+            warnings.simplefilter("always", UserWarning)
+            cat_falsify = falsify_graph(
+                graph,
+                nw.from_native(cat_frame, eager_only=True),
+                n_permutations=2,
+                random_seed=0,
+                include_unconditional=False,
+            )
+        assert len(falsify_caught) == 1
+        assert "G contributed no columns" in str(falsify_caught[0].message)
+        assert cat_falsify.n_lmc_tests == 0
+        assert cat_falsify.given_lmc_violations == 0
+        assert cat_falsify.can_evaluate is False
+        assert cat_falsify.falsified is None
+        assert cat_falsify.local_violations["rank_collapsed"].all()
+        assert cat_falsify.local_violations["requested_k"].eq(0).all()
+        assert cat_falsify.local_violations["p_value"].notna().all()
+        text = "\n".join(cat_falsify._summary_lines())
+        assert "rank-collapsed" in text
+        assert "we do not reject" not in text
+        assert "not_rejected" not in repr(cat_falsify)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            num_falsify = falsify_graph(
+                graph,
+                nw.from_native(num_frame, eager_only=True),
+                n_permutations=2,
+                random_seed=0,
+                include_unconditional=False,
+            )
+        assert num_falsify.n_lmc_tests == 0
+        assert num_falsify.falsified is None
+        assert cat_falsify.local_violations["p_value"].to_numpy() == pytest.approx(
+            num_falsify.local_violations["p_value"].to_numpy()
+        )

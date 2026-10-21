@@ -21,7 +21,9 @@ conditioning design, so constant, duplicated, or collinear conditioners
 behave as if they were absent, and every degenerate input maps to a
 named skip instead of a NaN or a runtime warning. The engine stays
 silent: ``requested_k`` and ``effective_k`` record the collapse, and
-callers decide whether a collapsed row counts.
+callers decide whether a collapsed row counts. A named conditioner that
+encodes to zero columns is not a smaller rank of the columns that entered;
+``dropped_conditioner_names`` reports it, and callers mark that row.
 
 Every variable enters as a *block* of one or more numeric columns. A
 continuous variable is one column; a categorical variable is its ``k - 1``
@@ -425,6 +427,44 @@ def stack_blocks(blocks: Mapping[str, np.ndarray], names: Iterable[str]) -> np.n
     return np.column_stack(selected)
 
 
+def dropped_conditioner_names(
+    blocks: Mapping[str, np.ndarray],
+    names: Iterable[str],
+) -> tuple[str, ...]:
+    """Named conditioners whose block contributed no columns.
+
+    A single-level categorical encodes to a zero-width indicator block.
+    ``stack_blocks`` drops that block, so ``requested_k`` stays the columns
+    that entered. Callers mark the written-test row collapsed. The engine
+    does not warn.
+    """
+    dropped: list[str] = []
+    for name in names:
+        block = blocks.get(name)
+        if block is not None and block.ndim == 2 and block.shape[1] == 0:
+            dropped.append(name)
+    return tuple(dropped)
+
+
+def named_column_ci(
+    data: nw.DataFrame,
+    x: str,
+    y: str,
+    z_vars: Iterable[str],
+    categorical_vars: Iterable[str] | None = None,
+) -> tuple[CIResult, tuple[str, ...]]:
+    """Run one named-column CI test and report dropped conditioners.
+
+    ``requested_k`` is the columns that entered. A named conditioner that
+    encoded to zero columns is returned separately so callers can mark the
+    row collapsed without changing the engine's rank formula.
+    """
+    names = tuple(z_vars)
+    blocks = variable_blocks(data, [x, y, *names], categorical_vars)
+    result = partial_correlation_ci(blocks[x], blocks[y], stack_blocks(blocks, names))
+    return result, dropped_conditioner_names(blocks, names)
+
+
 class _PartialCorrelationTester:
     """Memoized partial-correlation conditional independence tester.
 
@@ -466,6 +506,10 @@ class _PartialCorrelationTester:
         if result is None or result.skip_reason is not None or result.p is None:
             return None
         return result.p
+
+    def dropped_conditioners(self, names: Iterable[str]) -> tuple[str, ...]:
+        """Named conditioners that encoded to a zero-column block."""
+        return dropped_conditioner_names(self._blocks, names)
 
     def _compute(self, x: str, y: str, z_vars: tuple[str, ...]) -> CIResult | None:
         needed = [x, y, *z_vars]

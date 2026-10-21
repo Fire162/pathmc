@@ -1484,9 +1484,10 @@ class PathModel:
         association that the DAG says should not exist, suggesting a
         missing edge or incorrect structure. Each row also reports
         ``requested_k``, ``effective_k``, ``rank_collapsed``, and ``df``.
-        When a conditioner is constant, duplicated, or collinear with the
-        others, ``rank_collapsed`` is set and a warning is emitted: the
-        p-value then refers to that smaller set, not the independence
+        When a conditioner is constant, duplicated, collinear with the
+        others, or a single-level categorical that contributed no columns,
+        ``rank_collapsed`` is set and a warning is emitted: the p-value
+        then refers to the columns that entered, not the independence
         implied by the DAG. ``n_violations``, ``violations``, the compact
         representation, and the HTML banner exclude that row. The display
         does not mark it pass or fail. Drop the redundant variable and
