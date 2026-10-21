@@ -400,6 +400,43 @@ class TestResidualPredictiveDo:
         assert abs(predictive.mean("L") - structural) < 0.75, predictive.mean("L")
         assert float(np.var(predictive.dataset["L"].to_numpy())) > 1.0
 
+    def test_reentry_parent_is_structural_not_data_column(self):
+        """A block member must not read an outside parent from the data column.
+
+        Compiling the block when the first member is referenced resolves the
+        later member's parent before that parent exists, so the resolver falls
+        back to the raw column. Predictive variance then collapses to the
+        member's own residual.
+        """
+        from pytensor.graph.traversal import ancestors
+
+        n = 80
+        data = pd.DataFrame({c: np.zeros(n) for c in ("X", "Y1", "M", "Y2")})
+        spec = "Y1 ~ X\nM ~ Y1\nY2 ~ M\nY1 ~~ Y2"
+        model = self._point_model(
+            spec,
+            data,
+            {
+                "beta_Y1": 0.0,
+                "beta_M": 1.0,
+                "beta_Y2": 1.0,
+                "sigma_M": 1.0,
+                "chol_Y1_Y2": np.array([1.0, 0.0, 1.0]),
+            },
+        )
+        est_mu = {
+            getattr(v, "name", None) for v in ancestors([model.pymc_model["mu_Y2"]])
+        }
+        assert "mu_M" in est_mu
+        sibling = model._predictive_gen_model()
+        y2_names = {getattr(v, "name", None) for v in ancestors([sibling["Y2"]])}
+        assert "M" in y2_names
+        assert "Y1" in y2_names
+        draws = model.do(kind="predictive")
+        var_y2 = float(np.var(draws.dataset["Y2"].to_numpy()))
+        # Y2 = M + e2 and M = Y1 + e_M, so variance is about 3, not Var(e2).
+        assert var_y2 > 2.0, var_y2
+
 
 def _panel_residual_cov_data() -> pd.DataFrame:
     rng = np.random.default_rng(42)

@@ -1512,11 +1512,10 @@ def run_do_pymc(
     data_basis_bindings = getattr(gen_model, "_pathmc_data_bases", {})
     for var, val in set.items():
         # Generative siblings name the block member itself. Descendants
-        # read that realized value, so the intervention replaces it.
-        # The joint and a later member's structural mean still depend on
-        # ``mu_{var}``. Replacing both makes the generative correction
-        # ``beta * (realized_parent - mu_parent)`` zero, dropping the
-        # intervened parent's residual and keeping the descendant's own.
+        # read that realized value, so replacing it drops the intervened
+        # parent's residual and leaves the descendant's own joint slice.
+        # ``mu_{var}`` is the structural mean; replacing it too keeps mean
+        # propagation and structural references on the intervention.
         keys: list[str] = []
         if var in block_vars and var in gen_model.named_vars:
             keys.append(var)
