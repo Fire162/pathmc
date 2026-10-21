@@ -1509,13 +1509,14 @@ def run_do_pymc(
     block_vars = {v for block in graph_info.residual_blocks for v in block}
 
     replacements: dict[str, Any] = {}
+    scaled_interventions: dict[str, np.ndarray] = {}
     data_basis_bindings = getattr(gen_model, "_pathmc_data_bases", {})
     for var, val in set.items():
         # Generative siblings name the block member itself. Descendants
         # read that realized value, so replacing it drops the intervened
         # parent's residual and leaves the descendant's own joint slice.
-        # ``mu_{var}`` is the structural mean; replacing it too keeps mean
-        # propagation and structural references on the intervention.
+        # Block members read the structural mean, so the mean walk below
+        # also substitutes ``mu_{var}`` or ``pathmc_resp_{var}``.
         keys: list[str] = []
         if var in block_vars and var in gen_model.named_vars:
             keys.append(var)
@@ -1529,6 +1530,7 @@ def run_do_pymc(
         arr = _scale_cross_section_intervention(
             var, _intervention_array(val, N), data, scaling_factors
         )
+        scaled_interventions[var] = arr
         for key in keys:
             replacements[key] = arr.astype(gen_model[key].dtype)
         if data_basis_bindings:
@@ -1545,6 +1547,21 @@ def run_do_pymc(
 
         mean_det_names: dict[str, str] = {}
         expr_replacements: dict[Any, Any] = {}
+        # Block members read the parent's structural mean, not its free RV.
+        # pm.do already replaced the RV, which non-block equations read.
+        for var, arr in scaled_interventions.items():
+            if var in block_vars or var in latent:
+                continue
+            family = families.get(var, "")
+            node_name = (
+                f"pathmc_resp_{var}"
+                if family in ("bernoulli", "poisson", "negbinomial")
+                else f"mu_{var}"
+            )
+            if node_name not in do_model.named_vars:
+                continue
+            node = do_model[node_name]
+            expr_replacements[node] = pt.as_tensor_variable(arr).astype(node.dtype)
         mu_source_exprs = [
             do_model[f"mu_{var}"] * 1
             for var in graph_info.topological_order

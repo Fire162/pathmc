@@ -249,10 +249,11 @@ class TestResidualPredictiveDo:
         data: pd.DataFrame,
         overrides: dict[str, float | np.ndarray],
         latent: list[str] | None = None,
+        families: dict[str, str] | None = None,
     ) -> pathmc.PathModel:
         import arviz as az
 
-        model = pathmc.model(spec, data=data, latent=latent)
+        model = pathmc.model(spec, data=data, latent=latent, families=families)
         free = [rv.name for rv in model.pymc_model.free_RVs]
         with model.pymc_model:
             prior = pm.sample_prior_predictive(draws=1, random_seed=1)
@@ -436,6 +437,66 @@ class TestResidualPredictiveDo:
         var_y2 = float(np.var(draws.dataset["Y2"].to_numpy()))
         # Y2 = M + e2 and M = Y1 + e_M, so variance is about 3, not Var(e2).
         assert var_y2 > 2.0, var_y2
+
+    def test_mean_do_on_outside_parent_reaches_later_member(self):
+        """do(M) must shift a later block member that reads M structurally.
+
+        The mean walk used to replace only the free RV. Block members read
+        ``mu_M``, so the intervention never arrived and ate() stayed 0.
+        """
+        n = 40
+        data = pd.DataFrame({c: np.zeros(n) for c in ("X", "Y1", "M", "Y2", "Z")})
+        model = self._point_model(
+            "Y1 ~ X\nM ~ 0 + 2*Y1\nY2 ~ 0 + 4*M\nZ ~ 0 + 1*Y2\nY1 ~~ Y2",
+            data,
+            {"beta_Y1": 0.0},
+        )
+        shift = model.do(set={"M": 1.0}, kind="mean").mean("Y2") - model.do(
+            set={"M": 0.0}, kind="mean"
+        ).mean("Y2")
+        assert abs(shift - 4.0) < 1e-6, shift
+        assert abs(model.ate("Z", "M", kind="mean").mean() - 4.0) < 1e-6
+        product = self._point_model(
+            "Y1 ~ X\nM ~ Y1\nY2 ~ 0 + 4*M:X\nY1 ~~ Y2",
+            pd.DataFrame({
+                "X": np.ones(n),
+                "Y1": np.zeros(n),
+                "M": np.zeros(n),
+                "Y2": np.zeros(n),
+            }),
+            {"beta_Y1": 0.0, "beta_M": 0.0},
+        )
+        product_shift = product.do(set={"M": 1.0}, kind="mean").mean("Y2") - product.do(
+            set={"M": 0.0}, kind="mean"
+        ).mean("Y2")
+        assert abs(product_shift - 4.0) < 1e-6, product_shift
+
+    def test_non_gaussian_parent_is_response_scale(self):
+        """A Bernoulli parent of a block member is on the probability scale.
+
+        Leaving ``mu_M`` on the logit scale makes an unintervened descendant
+        track the linear predictor, and do(M) never reaches that descendant.
+        """
+        n = 60
+        data = pd.DataFrame({
+            "X": np.zeros(n),
+            "M": np.zeros(n),
+            "Y1": np.zeros(n),
+            "Y2": np.zeros(n),
+        })
+        model = self._point_model(
+            "M ~ X\nY1 ~ X\nY2 ~ 0 + 4*M\nY1 ~~ Y2",
+            data,
+            {"beta_M": np.array([1.0, 0.0]), "beta_Y1": np.array([0.0, 0.0])},
+            families={"M": "bernoulli"},
+        )
+        expected = 4.0 / (1.0 + np.exp(-1.0))
+        observed = model.do(kind="mean").mean("Y2")
+        assert abs(observed - expected) < 1e-6, (observed, expected)
+        shift = model.do(set={"M": 1.0}, kind="mean").mean("Y2") - model.do(
+            set={"M": 0.0}, kind="mean"
+        ).mean("Y2")
+        assert abs(shift - 4.0) < 1e-6, shift
 
 
 def _panel_residual_cov_data() -> pd.DataFrame:

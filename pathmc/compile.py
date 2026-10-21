@@ -26,10 +26,13 @@ interventional simulation.
 
 Regressions are compiled in topological order. A residual-block member is
 not compiled until its endogenous parents exist, so a later member cannot
-fall back to a raw parent column. The generative path emits a zero-mean
-joint, then realizes each member as its equation at realized parents plus
-its own residual slice. Downstream equations wire through those realized
-values, enabling PyMC-native do() interventions via graph surgery.
+fall back to a raw parent column. Discrete parents are registered on the
+response scale (``pathmc_resp_{var}``), not the link scale, so a block
+member's likelihood does not center on the linear predictor. The generative
+path emits a zero-mean joint, then realizes each member as its equation at
+realized parents plus its own residual slice. Downstream equations wire
+through those realized values, enabling PyMC-native do() interventions via
+graph surgery.
 
 Panel models with temporal dependencies (adstock transforms or lag
 terms) are compiled using ``pytensor.scan`` so that the generative model
@@ -858,9 +861,9 @@ def compile_to_pymc(
                     ).create_variable(beta_name)
 
         endogenous_rvs: dict[str, Any] = {}
-        # Noise-free structural means. Block members resolve endogenous
-        # parents from here so a later member cannot fall back to the raw
-        # data column of a parent the old atomic compiler had not reached.
+        # Noise-free structural means on the response scale. Block members resolve
+        # endogenous parents from here so a later member cannot fall back to a raw
+        # data column, and a discrete parent is not left on the link scale.
         structural_means: dict[str, Any] = {}
 
         var_to_block_idx: dict[str, int] = {}
@@ -995,7 +998,14 @@ def compile_to_pymc(
                 mu_gen = mu_gen + contribution
                 mu_est = mu_est + contribution
 
-            structural_means[var] = pm.Deterministic(f"mu_{var}", mu_gen)
+            mu_det = pm.Deterministic(f"mu_{var}", mu_gen)
+            if family in ("bernoulli", "poisson", "negbinomial"):
+                structural_means[var] = pm.Deterministic(
+                    f"pathmc_resp_{var}",
+                    _response_structural_mean(mu_det, family),
+                )
+            else:
+                structural_means[var] = mu_det
 
             rv = _emit_free_rv(var, mu_est, family, latent, sparse_data, priors)
             if family in ("bernoulli", "poisson", "negbinomial"):
@@ -1935,6 +1945,24 @@ def _identify_residual_blocks(spec: Spec) -> tuple[set[str], list[set[str]]]:
     blocks = list(nx.connected_components(ug))
     block_vars = set().union(*blocks)
     return block_vars, blocks
+
+
+def _response_structural_mean(mu: Any, family: str) -> Any:
+    """Map a link-scale structural mean onto the response scale.
+
+    Block members read parent structural means. Identity-link families are
+    already on that scale. Bernoulli, Poisson, and negative binomial must
+    not stay on the logit or log scale, or a descendant's likelihood centers
+    on the linear predictor.
+    """
+    import pytensor.tensor as pt
+
+    if family == "bernoulli":
+        # Match simulate._apply_inverse_link so the two paths agree.
+        return 1.0 / (1.0 + pt.exp(-mu))
+    if family in ("poisson", "negbinomial"):
+        return pt.exp(mu)
+    return mu
 
 
 # ---------------------------------------------------------------------------
