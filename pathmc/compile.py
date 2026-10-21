@@ -1761,8 +1761,10 @@ def _compile_residual_block(
     graph (enabling ``pm.do()`` propagation through block variables).
 
     On the estimation path, *endogenous_rvs* stores structural means.
-    On the generative path, it stores realized noisy slices of the joint
-    residual RV so descendants read correlated noise, not ``mu_{var}``.
+    On the generative path, it stores the joint slice plus, when the
+    equation reads an earlier block member, that member's residual
+    deviation times the structural coefficient. The joint stays centered
+    on the structural means, so the estimation likelihood is unchanged.
 
     Delegates the covariance parameterization and likelihood emission
     to an :class:`~pathmc.residuals.LKJResidual`.
@@ -1794,6 +1796,22 @@ def _compile_residual_block(
 
     mu_dict: dict[str, Any] = {}
     data_dict: dict[str, np.ndarray] = {}
+    betas: dict[str, Any | None] = {}
+
+    def _structural_mu(var: str, beta: Any | None) -> Any:
+        resolver = _make_cross_sectional_resolver(
+            data,
+            data_vars,
+            endogenous_rvs,
+            transform_map,
+            transform_param_rvs,
+            panel_info,
+            lhs=var,
+            priors=priors,
+            categorical_bases=categorical_bases,
+            categorical_coefficients=categorical_coefficients,
+        )
+        return build_mu(mu_specs[var], resolver, beta, pt.zeros(len(data)))
 
     for var in process_order:
         ms = mu_specs[var]
@@ -1810,19 +1828,8 @@ def _compile_residual_block(
                     sigma=10,
                     dims=f"{var}_predictors",
                 )
-        resolver = _make_cross_sectional_resolver(
-            data,
-            data_vars,
-            endogenous_rvs,
-            transform_map,
-            transform_param_rvs,
-            panel_info,
-            lhs=var,
-            priors=priors,
-            categorical_bases=categorical_bases,
-            categorical_coefficients=categorical_coefficients,
-        )
-        mu = build_mu(ms, resolver, beta, pt.zeros(len(data)))
+        betas[var] = beta
+        mu = _structural_mu(var, beta)
 
         mu_det = pm.Deterministic(f"mu_{var}", mu)
         endogenous_rvs[var] = mu_det
@@ -1835,8 +1842,21 @@ def _compile_residual_block(
     )
     if not generative:
         return None
-    for i, var in enumerate(block_sorted):
-        endogenous_rvs[var] = pm.Deterministic(var, joint[:, i])
+    # Joint stays on structural means. A later member's slice is then
+    # ``mu + e`` and misses ``beta * e_parent``. Add that deviation here,
+    # in topological order, so the realized value — not the likelihood —
+    # carries upstream residual through the structural coefficient.
+    index = {var: i for i, var in enumerate(block_sorted)}
+    realized: dict[str, Any] = {}
+    for var in process_order:
+        for done, value in realized.items():
+            endogenous_rvs[done] = value
+        realized_expr = joint[:, index[var]]
+        if _references_block_members(mu_specs[var], block):
+            noisy_mu = _structural_mu(var, betas[var])
+            realized_expr = realized_expr + (noisy_mu - mu_dict[var])
+        realized[var] = pm.Deterministic(var, realized_expr)
+    endogenous_rvs.update(realized)
     return str(joint.name)
 
 
