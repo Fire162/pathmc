@@ -389,19 +389,29 @@ def _unit_prediction(
     assert model._gen_model is not None
     assert model._idata is not None
 
+    categorical_vars = model._categorical_vars
+    categorical_set = {
+        var: value for var, value in set_dict.items() if var in categorical_vars
+    }
+    numeric_set = {
+        var: value for var, value in set_dict.items() if var not in categorical_vars
+    }
+
     def _run() -> xr.DataArray:
         assert model._idata is not None
-        result = run_do_pymc(
-            gen_model=model._gen_model,
-            graph_info=model._graph_info,
-            idata=model._idata,
-            data=data,
-            set=set_dict,
-            kind="mean",
-            families=model._families,
-            average_units=False,
-            scaling_factors=model._scaling_factors,
-        )
+        with model._categorical_intervention(categorical_set):
+            result = run_do_pymc(
+                gen_model=model._gen_model,
+                graph_info=model._graph_info,
+                idata=model._idata,
+                data=data,
+                set=numeric_set,
+                kind="mean",
+                families=model._families,
+                average_units=False,
+                scaling_factors=model._scaling_factors,
+                categorical_vars=model._categorical_vars,
+            )
         if outcome not in result.dataset:
             raise KeyError(
                 f"Outcome '{outcome}' not found in do() output. "

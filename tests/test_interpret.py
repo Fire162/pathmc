@@ -138,6 +138,42 @@ class TestPredictions:
         assert isinstance(pred, InterpretResult)
         assert pred.dataset["Y"].sizes["unit"] == len(grid)
 
+    def test_predictions_with_string_categorical_predictor(self):
+        import arviz as az
+
+        region = np.array(["north", "south", "north", "south"])
+        df = pd.DataFrame({
+            "region": region,
+            "Y": np.where(region == "north", 1.0, 4.0),
+        })
+        model = pathmc.model("Y ~ region", data=df)
+        model._idata = az.from_dict(
+            {
+                "posterior": {
+                    "beta_Y": np.array([[[1.0]]]),
+                    "beta_Y_region": np.array([[[3.0]]]),
+                    "sigma_Y": np.array([[0.1]]),
+                }
+            },
+            coords={"Y_predictors": ["Intercept"], "Y_region_levels": ["south"]},
+            dims={"beta_Y": ["Y_predictors"], "beta_Y_region": ["Y_region_levels"]},
+        )
+        pred = model.predictions("Y")
+        assert isinstance(pred, InterpretResult)
+        np.testing.assert_allclose(
+            pred.dataset["Y"].values.squeeze(), [1.0, 4.0, 1.0, 4.0]
+        )
+
+        pred_north = model.predictions("Y", set={"region": "north"})
+        np.testing.assert_allclose(
+            pred_north.dataset["Y"].values.squeeze(), [1.0, 1.0, 1.0, 1.0]
+        )
+
+        with pytest.raises(
+            ValueError, match="Categorical predictor 'region' contains unseen level"
+        ):
+            model.predictions("Y", set={"region": "east"})
+
 
 class TestRatioLift:
     def test_ratio_and_lift_finite(self, fork_model):

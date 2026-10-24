@@ -1366,7 +1366,10 @@ def _business_exog_value(
     """Empirical fill for an exogenous variable in business units."""
     if var not in data.columns:
         return 0.0
-    values = np.asarray(data[var].to_numpy(), dtype=float)
+    try:
+        values = np.asarray(data[var].to_numpy(), dtype=float)
+    except (ValueError, TypeError):
+        return 0.0
     if scaling_factors is not None:
         values = np.asarray(
             scaling_factors.to_business(
